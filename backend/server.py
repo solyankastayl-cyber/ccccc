@@ -170,6 +170,14 @@ try:
 except ImportError as e:
     print(f"[Routes] TA Setup API router not available: {e}")
 
+# TA Research API (Unified Chart Objects Pipeline)
+try:
+    from modules.ta_engine.research_api import router as research_api_router
+    app.include_router(research_api_router)
+    print("[Routes] TA Research API router registered")
+except ImportError as e:
+    print(f"[Routes] TA Research API router not available: {e}")
+
 # TA Setup Engine Routes (Setup Graph Architecture)
 try:
     from modules.ta_engine.setup.setup_routes import router as ta_setup_router

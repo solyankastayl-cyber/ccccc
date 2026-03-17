@@ -305,8 +305,8 @@ const TechAnalysisModule = () => {
 // VIEW COMPONENTS
 // ============================================
 
-// Import views - using new Research UI with Setup API
-import ResearchView from './views/ResearchViewNew';
+// Import views - V2: Unified Chart Objects Architecture
+import ResearchView from './views/ResearchViewV2';
 import ChartLabView from './views/ChartLabView';
 import HypothesesView from './views/HypothesesView';
 

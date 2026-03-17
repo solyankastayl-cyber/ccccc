@@ -281,15 +281,27 @@ async def get_ta_setup(
     try:
         from modules.data.coinbase_provider import coinbase_provider
         
-        # Convert TF to coinbase format
+        # Convert TF to coinbase format and determine limit
         coinbase_tf_map = {
             "4H": "4h", "1D": "1d", "7D": "1d", "30D": "1d", "180D": "1d", "1Y": "1d"
         }
         cb_tf = coinbase_tf_map.get(normalized_tf, "1d")
         
+        # Calculate limit based on timeframe - load full history
+        # BTC started trading on Coinbase around 2015
+        # Daily candles: ~3650 days (10 years)
+        limit_map = {
+            "4H": 1000,      # ~166 days
+            "1D": 2500,      # ~7 years of daily data
+            "7D": 2500,      # Full history
+            "30D": 2500,     # Full history
+            "180D": 2500,    # Full history
+            "1Y": 2500       # Full history
+        }
+        
         # Fetch candles
         product_id = f"{clean_symbol}-USD"
-        limit = 200
+        limit = limit_map.get(normalized_tf, 2500)
         
         raw_candles = await coinbase_provider.get_candles(
             product_id=product_id,

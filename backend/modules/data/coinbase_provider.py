@@ -60,7 +60,7 @@ class CoinbaseProvider:
         Args:
             product_id: Trading pair (e.g., "BTC-USD")
             timeframe: Candle interval (1m, 5m, 15m, 1h, 4h, 1d)
-            limit: Max candles to return (max 300)
+            limit: Max candles to return (max 300 per request, uses pagination for more)
             start: Start timestamp (ISO format or unix seconds)
             end: End timestamp (ISO format or unix seconds)
         
@@ -74,10 +74,20 @@ class CoinbaseProvider:
         if not granularity:
             raise ValueError(f"Invalid timeframe: {timeframe}. Use: {list(self.GRANULARITIES.keys())}")
         
-        # Rate limiting
+        # Single request for small limit
+        if limit <= 300:
+            return await self._fetch_candles_single(product_id, granularity, timeframe, limit, start, end)
+        
+        # Paginate for larger requests
+        return await self._fetch_candles_paginated(product_id, granularity, timeframe, limit, start, end)
+    
+    async def _fetch_candles_single(
+        self, product_id: str, granularity: int, timeframe: str,
+        limit: int, start: Optional[int], end: Optional[int]
+    ) -> List[Dict[str, Any]]:
+        """Single request for candles (max 300)"""
         await self._rate_limit()
         
-        # Build request
         url = f"{self.BASE_URL}/products/{product_id}/candles"
         params = {"granularity": granularity}
         
@@ -91,9 +101,100 @@ class CoinbaseProvider:
             response.raise_for_status()
             data = response.json()
         
-        # Parse response: [[timestamp, low, high, open, close, volume], ...]
+        candles = self._parse_candles(data[:limit], timeframe)
+        candles.sort(key=lambda x: x["timestamp"])
+        return candles
+    
+    async def _fetch_candles_paginated(
+        self, product_id: str, granularity: int, timeframe: str,
+        limit: int, start: Optional[int], end: Optional[int]
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical candles with pagination.
+        Coinbase returns max 300 candles per request.
+        """
+        all_candles = []
+        now_ts = int(time.time())
+        
+        # Calculate end time
+        if end:
+            end_ts = end if end < 1e12 else int(end / 1000)
+        else:
+            end_ts = now_ts
+        
+        # Calculate start time based on limit
+        if start:
+            start_ts = start if start < 1e12 else int(start / 1000)
+        else:
+            # Calculate how far back we need to go
+            total_seconds = limit * granularity
+            start_ts = end_ts - total_seconds
+        
+        # Fetch in batches going backwards from end
+        current_end = end_ts
+        batch_size = 300
+        max_iterations = (limit // batch_size) + 2
+        
+        for _ in range(max_iterations):
+            if len(all_candles) >= limit:
+                break
+            
+            if current_end <= start_ts:
+                break
+            
+            # Calculate batch start (go back batch_size candles)
+            batch_start = current_end - (batch_size * granularity)
+            batch_start = max(batch_start, start_ts)
+            
+            await self._rate_limit()
+            
+            url = f"{self.BASE_URL}/products/{product_id}/candles"
+            params = {
+                "granularity": granularity,
+                "start": self._to_iso(batch_start),
+                "end": self._to_iso(current_end)
+            }
+            
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(url, params=params, timeout=30)
+                    response.raise_for_status()
+                    data = response.json()
+                
+                if not data:
+                    break
+                
+                batch_candles = self._parse_candles(data, timeframe)
+                all_candles.extend(batch_candles)
+                
+                # Move end to before the earliest candle we got
+                if batch_candles:
+                    earliest = min(c['timestamp'] for c in batch_candles)
+                    current_end = (earliest // 1000) - granularity
+                else:
+                    break
+                    
+            except Exception as e:
+                print(f"Pagination error: {e}")
+                break
+        
+        # Remove duplicates and sort
+        seen = set()
+        unique_candles = []
+        for c in all_candles:
+            if c['timestamp'] not in seen:
+                seen.add(c['timestamp'])
+                unique_candles.append(c)
+        
+        unique_candles.sort(key=lambda x: x["timestamp"])
+        
+        # Return only requested limit
+        return unique_candles[-limit:] if len(unique_candles) > limit else unique_candles
+    
+    def _parse_candles(self, data: List, timeframe: str) -> List[Dict[str, Any]]:
+        """Parse Coinbase candle response"""
         candles = []
-        for row in data[:limit]:
+        for row in data:
             if len(row) >= 6:
                 candles.append({
                     "timestamp": row[0] * 1000,  # Convert to ms
@@ -105,10 +206,6 @@ class CoinbaseProvider:
                     "timeframe": timeframe,
                     "source": "coinbase",
                 })
-        
-        # Sort by timestamp ascending
-        candles.sort(key=lambda x: x["timestamp"])
-        
         return candles
     
     async def get_ticker(self, product_id: str) -> Dict[str, Any]:

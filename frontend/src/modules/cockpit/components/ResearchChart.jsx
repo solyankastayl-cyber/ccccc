@@ -292,11 +292,12 @@ const ResearchChart = ({
       if (setup.invalidation) {
         targetLines.push({ price: setup.invalidation, color: COLORS.invalidation, label: 'Invalidation' });
       }
-      if (setup.targets?.[0]) {
-        targetLines.push({ price: setup.targets[0], color: COLORS.target, label: 'T1' });
+      // targets is array of {price, label} objects
+      if (setup.targets?.[0]?.price) {
+        targetLines.push({ price: setup.targets[0].price, color: COLORS.target, label: setup.targets[0].label || 'T1' });
       }
-      if (setup.targets?.[1]) {
-        targetLines.push({ price: setup.targets[1], color: COLORS.target, label: 'T2' });
+      if (setup.targets?.[1]?.price) {
+        targetLines.push({ price: setup.targets[1].price, color: COLORS.target, label: setup.targets[1].label || 'T2' });
       }
       
       targetLines.forEach(line => {

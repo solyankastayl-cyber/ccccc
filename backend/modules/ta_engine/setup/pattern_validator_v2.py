@@ -1,22 +1,23 @@
 """
-Pattern Validation Engine v2
-=============================
+Pattern Validation Engine v2 with Best-Fit Boundary Selection
+==============================================================
 
-STRICT per-pattern validators with real geometric validation.
+P0 FIX: Anchor Point Selection Engine
+-------------------------------------
+Before validation, we now:
+1. Generate ALL candidate lines from pivot combinations
+2. Score each line by touch quality, pivot confirmation, candle violations
+3. Select the BEST-FIT upper and lower boundaries
+4. Only then run pattern validation
+
+This fixes the issue where lines were drawn through wrong pivot points,
+resulting in visually incorrect patterns.
 
 Rules:
 1. Each pattern type has its own validator with specific requirements
 2. If ANY requirement fails → return None (no garbage)
 3. Lines are EXACTLY 2 points
 4. Confidence reflects actual quality, not random numbers
-
-Descending Triangle requirements:
-- Upper boundary: descending (slope < 0)
-- Lower boundary: near-horizontal (|slope| < threshold)
-- Minimum 2 confirmed pivot highs on upper line
-- Minimum 2 confirmed pivot lows on lower line
-- Narrowing structure (apex formation)
-- Price contained inside pattern most of the time
 """
 
 from typing import List, Dict, Optional, Tuple
@@ -40,6 +41,7 @@ class TrendLine:
     p2: Pivot
     slope: float
     slope_normalized: float  # slope as % of price per day
+    score: float = 0.0  # Best-fit score
     
     @classmethod
     def from_pivots(cls, p1: Pivot, p2: Pivot) -> 'TrendLine':
@@ -60,6 +62,13 @@ class TrendLine:
             return self.p1.value
         return self.p1.value + self.slope * (time - self.p1.time)
     
+    def value_at_index(self, index: int, p1_index: int) -> float:
+        """Get line value at given index."""
+        if self.p2.index == self.p1.index:
+            return self.p1.value
+        slope_idx = (self.p2.value - self.p1.value) / (self.p2.index - self.p1.index)
+        return self.p1.value + slope_idx * (index - self.p1.index)
+    
     def to_points(self) -> List[Dict]:
         """Return exactly 2 points for rendering."""
         return [
@@ -70,50 +79,36 @@ class TrendLine:
 
 class PatternValidatorV2:
     """
-    Strict pattern validation with per-pattern validators.
+    Strict pattern validation with Best-Fit Boundary Selection.
     """
     
     # Thresholds
-    HORIZONTAL_SLOPE_THRESHOLD = 0.0003  # Max normalized slope for "horizontal"
-    DESCENDING_SLOPE_THRESHOLD = -0.0005  # Min slope for "descending"
-    ASCENDING_SLOPE_THRESHOLD = 0.0005   # Min slope for "ascending"
+    HORIZONTAL_SLOPE_THRESHOLD = 0.0003
+    DESCENDING_SLOPE_THRESHOLD = -0.0005
+    ASCENDING_SLOPE_THRESHOLD = 0.0005
     
-    TOUCH_TOLERANCE = 0.012  # 1.2% tolerance for line touches
+    TOUCH_TOLERANCE = 0.008  # 0.8% tolerance
     MIN_PIVOTS_PER_LINE = 2
     MIN_TOTAL_TOUCHES = 4
+    MIN_PIVOT_DISTANCE = 10
     
-    PRICE_CONTAINMENT_RATIO = 0.70  # 70% of candles must be inside pattern
+    PRICE_CONTAINMENT_RATIO = 0.70
     
     def __init__(self, timeframe: str = "1D"):
-        # Pivot detection window by timeframe
-        self.pivot_windows = {
-            "4H": 3,
-            "1D": 5,
-            "7D": 7,
-            "30D": 10,
-        }
+        self.pivot_windows = {"4H": 3, "1D": 5, "7D": 7, "30D": 10}
         self.pivot_window = self.pivot_windows.get(timeframe.upper(), 5)
         
-        # Pattern detection window (number of candles to analyze)
-        # Increased to make pattern more visible on chart
-        self.pattern_windows = {
-            "4H": 100,
-            "1D": 200,  # ~6-7 months of daily data
-            "7D": 150,
-            "30D": 100,
-        }
-        self.pattern_window = self.pattern_windows.get(timeframe.upper(), 200)
+        self.pattern_windows = {"4H": 80, "1D": 120, "7D": 100, "30D": 80}
+        self.pattern_window = self.pattern_windows.get(timeframe.upper(), 120)
+        
+        self._recent_candles: List[Dict] = []
     
     def find_pivots(self, candles: List[Dict]) -> Tuple[List[Pivot], List[Pivot]]:
-        """
-        Find pivot highs and lows in recent candles.
-        Returns (pivot_highs, pivot_lows) sorted by time.
-        """
         if len(candles) < self.pivot_window * 2 + 1:
             return [], []
         
-        # Use only recent candles for pattern detection
-        recent = candles[-self.pattern_window:] if len(candles) > self.pattern_window else candles
+        self._recent_candles = candles[-self.pattern_window:] if len(candles) > self.pattern_window else candles
+        recent = self._recent_candles
         
         pivot_highs = []
         pivot_lows = []
@@ -127,14 +122,12 @@ class PatternValidatorV2:
             if time > 1e12:
                 time = time // 1000
             
-            # Check pivot high: must be higher than ALL surrounding candles
             is_pivot_high = True
             for j in range(1, window + 1):
                 if high <= recent[i - j]['high'] or high <= recent[i + j]['high']:
                     is_pivot_high = False
                     break
             
-            # Check pivot low: must be lower than ALL surrounding candles
             is_pivot_low = True
             for j in range(1, window + 1):
                 if low >= recent[i - j]['low'] or low >= recent[i + j]['low']:
@@ -142,182 +135,179 @@ class PatternValidatorV2:
                     break
             
             if is_pivot_high:
-                pivot_highs.append(Pivot(
-                    index=i,
-                    time=time,
-                    value=high,
-                    pivot_type="high"
-                ))
+                pivot_highs.append(Pivot(index=i, time=time, value=high, pivot_type="high"))
             
             if is_pivot_low:
-                pivot_lows.append(Pivot(
-                    index=i,
-                    time=time,
-                    value=low,
-                    pivot_type="low"
-                ))
+                pivot_lows.append(Pivot(index=i, time=time, value=low, pivot_type="low"))
         
         return pivot_highs, pivot_lows
     
-    def count_line_touches(self, line: TrendLine, candles: List[Dict], line_type: str) -> int:
-        """
-        Count how many candles "touch" the trendline.
+    def generate_line_candidates(self, pivots: List[Pivot]) -> List[TrendLine]:
+        lines = []
+        for i in range(len(pivots)):
+            for j in range(i + 1, len(pivots)):
+                p1 = pivots[i]
+                p2 = pivots[j]
+                if abs(p2.index - p1.index) < self.MIN_PIVOT_DISTANCE:
+                    continue
+                line = TrendLine.from_pivots(p1, p2)
+                lines.append(line)
+        return lines
+    
+    def score_trendline(self, line: TrendLine, pivots: List[Pivot], candles: List[Dict], line_type: str) -> float:
+        touch_count = 0
+        pivot_confirmations = 0
+        candle_violations = 0
+        tolerance = self.TOUCH_TOLERANCE
         
-        For upper line: check if candle high is near line
-        For lower line: check if candle low is near line
-        """
-        touches = 0
-        
-        # Only check candles within the line's time range
-        for c in candles:
-            time = c.get('timestamp', c.get('time', 0))
-            if time > 1e12:
-                time = time // 1000
-            
-            # Skip candles outside line time range
-            if time < line.p1.time or time > line.p2.time:
+        for i in range(line.p1.index, min(line.p2.index + 1, len(candles))):
+            if i < 0 or i >= len(candles):
                 continue
-            
-            line_value = line.value_at(time)
+            candle = candles[i]
+            expected_price = line.value_at_index(i, line.p1.index)
             
             if line_type == "high":
+                price = candle['high']
+                distance = abs(price - expected_price) / expected_price if expected_price > 0 else 1
+                if distance < tolerance:
+                    touch_count += 1
+                if price > expected_price * (1 + tolerance * 1.5):
+                    candle_violations += 1
+            else:
+                price = candle['low']
+                distance = abs(price - expected_price) / expected_price if expected_price > 0 else 1
+                if distance < tolerance:
+                    touch_count += 1
+                if price < expected_price * (1 - tolerance * 1.5):
+                    candle_violations += 1
+        
+        for pivot in pivots:
+            if pivot.index < line.p1.index or pivot.index > line.p2.index:
+                continue
+            expected_price = line.value_at_index(pivot.index, line.p1.index)
+            dist = abs(pivot.value - expected_price) / expected_price if expected_price > 0 else 1
+            if dist < tolerance:
+                pivot_confirmations += 1
+        
+        time_span = line.p2.index - line.p1.index
+        time_bonus = min(time_span / 50, 2.0)
+        
+        score = touch_count * 2 + pivot_confirmations * 3 - candle_violations * 4 + time_bonus
+        return score
+    
+    def find_best_line(self, pivots: List[Pivot], candles: List[Dict], line_type: str, slope_constraint: Optional[str] = None) -> Optional[TrendLine]:
+        if len(pivots) < 2:
+            return None
+        
+        candidates = self.generate_line_candidates(pivots)
+        if not candidates:
+            return None
+        
+        best_line = None
+        best_score = float('-inf')
+        
+        for line in candidates:
+            if slope_constraint == "descending":
+                if line.slope_normalized >= 0:
+                    continue
+            elif slope_constraint == "ascending":
+                if line.slope_normalized <= 0:
+                    continue
+            elif slope_constraint == "horizontal":
+                if abs(line.slope_normalized) > self.HORIZONTAL_SLOPE_THRESHOLD:
+                    continue
+            
+            score = self.score_trendline(line, pivots, candles, line_type)
+            if score > best_score:
+                best_score = score
+                best_line = line
+                best_line.score = score
+        
+        if best_line and best_score < 2:
+            return None
+        
+        return best_line
+    
+    def count_line_touches(self, line: TrendLine, candles: List[Dict], line_type: str) -> int:
+        touches = 0
+        for i in range(line.p1.index, min(line.p2.index + 1, len(candles))):
+            if i < 0 or i >= len(candles):
+                continue
+            c = candles[i]
+            line_value = line.value_at_index(i, line.p1.index)
+            if line_type == "high":
                 price = c['high']
-                # Touch = price is within tolerance of line
-                if abs(price - line_value) / line_value < self.TOUCH_TOLERANCE:
-                    touches += 1
             else:
                 price = c['low']
-                if abs(price - line_value) / line_value < self.TOUCH_TOLERANCE:
-                    touches += 1
-        
+            if abs(price - line_value) / line_value < self.TOUCH_TOLERANCE:
+                touches += 1
         return touches
     
     def check_price_containment(self, upper: TrendLine, lower: TrendLine, candles: List[Dict]) -> float:
-        """
-        Check what percentage of candles are contained between the two lines.
-        Returns ratio (0.0 to 1.0).
-        """
         inside_count = 0
         total_count = 0
+        start_idx = max(upper.p1.index, lower.p1.index)
+        end_idx = min(upper.p2.index, lower.p2.index)
         
-        for c in candles:
-            time = c.get('timestamp', c.get('time', 0))
-            if time > 1e12:
-                time = time // 1000
-            
-            # Only check within pattern time range
-            if time < max(upper.p1.time, lower.p1.time) or time > min(upper.p2.time, lower.p2.time):
+        for i in range(start_idx, end_idx + 1):
+            if i < 0 or i >= len(candles):
                 continue
-            
             total_count += 1
-            
-            upper_val = upper.value_at(time)
-            lower_val = lower.value_at(time)
-            
-            # Check if candle body is mostly inside
+            c = candles[i]
+            upper_val = upper.value_at_index(i, upper.p1.index)
+            lower_val = lower.value_at_index(i, lower.p1.index)
             if c['high'] <= upper_val * 1.02 and c['low'] >= lower_val * 0.98:
                 inside_count += 1
         
         return inside_count / total_count if total_count > 0 else 0
     
     def check_narrowing(self, upper: TrendLine, lower: TrendLine) -> bool:
-        """
-        Check if the pattern is narrowing (converging toward apex).
-        """
-        # Width at start
         width_start = upper.p1.value - lower.p1.value
-        
-        # Width at end
         width_end = upper.p2.value - lower.p2.value
-        
-        # For valid triangle, end width should be smaller than start
-        return width_end < width_start * 0.95  # At least 5% narrower
+        return width_end < width_start * 0.95
     
-    # =========================================================================
-    # STRICT VALIDATORS FOR EACH PATTERN TYPE
-    # =========================================================================
+    def count_pivot_touches(self, line: TrendLine, pivots: List[Pivot]) -> int:
+        touches = 0
+        for p in pivots:
+            if p.index < line.p1.index or p.index > line.p2.index:
+                continue
+            line_val = line.value_at_index(p.index, line.p1.index)
+            if abs(p.value - line_val) / line_val < self.TOUCH_TOLERANCE:
+                touches += 1
+        return touches
     
-    def validate_descending_triangle(
-        self,
-        pivot_highs: List[Pivot],
-        pivot_lows: List[Pivot],
-        candles: List[Dict]
-    ) -> Optional[Dict]:
-        """
-        Validate DESCENDING TRIANGLE.
-        
-        Requirements:
-        1. Upper boundary: DESCENDING (slope < 0)
-        2. Lower boundary: NEAR-HORIZONTAL (|slope| < threshold)
-        3. Minimum 2 pivot highs on upper line
-        4. Minimum 2 pivot lows on lower line
-        5. Narrowing structure
-        6. Price containment >= 70%
-        """
-        # Need enough pivots
-        if len(pivot_highs) < self.MIN_PIVOTS_PER_LINE:
-            return None
-        if len(pivot_lows) < self.MIN_PIVOTS_PER_LINE:
+    def validate_descending_triangle(self, pivot_highs: List[Pivot], pivot_lows: List[Pivot], candles: List[Dict]) -> Optional[Dict]:
+        if len(pivot_highs) < 2 or len(pivot_lows) < 2:
             return None
         
-        # Use recent pivots only
-        recent_highs = pivot_highs[-4:] if len(pivot_highs) > 4 else pivot_highs
-        recent_lows = pivot_lows[-4:] if len(pivot_lows) > 4 else pivot_lows
+        recent_highs = pivot_highs[-5:] if len(pivot_highs) > 5 else pivot_highs
+        recent_lows = pivot_lows[-5:] if len(pivot_lows) > 5 else pivot_lows
         
-        # Build upper line from first and last recent pivot highs
-        upper_line = TrendLine.from_pivots(recent_highs[0], recent_highs[-1])
+        upper_line = self.find_best_line(recent_highs, candles, "high", slope_constraint="descending")
+        lower_line = self.find_best_line(recent_lows, candles, "low", slope_constraint="horizontal")
         
-        # Build lower line from first and last recent pivot lows
-        lower_line = TrendLine.from_pivots(recent_lows[0], recent_lows[-1])
-        
-        # VALIDATION 1: Upper line must be DESCENDING
-        if upper_line.slope_normalized >= self.DESCENDING_SLOPE_THRESHOLD:
-            return None  # Upper line is not descending enough
-        
-        # VALIDATION 2: Lower line must be NEAR-HORIZONTAL
-        if abs(lower_line.slope_normalized) > self.HORIZONTAL_SLOPE_THRESHOLD:
-            return None  # Lower line is not horizontal enough
-        
-        # VALIDATION 3: Check pivot touches on upper line
-        upper_touches = 0
-        for p in recent_highs:
-            line_val = upper_line.value_at(p.time)
-            if abs(p.value - line_val) / line_val < self.TOUCH_TOLERANCE:
-                upper_touches += 1
-        
-        if upper_touches < self.MIN_PIVOTS_PER_LINE:
+        if not upper_line or not lower_line:
             return None
         
-        # VALIDATION 4: Check pivot touches on lower line
-        lower_touches = 0
-        for p in recent_lows:
-            line_val = lower_line.value_at(p.time)
-            if abs(p.value - line_val) / line_val < self.TOUCH_TOLERANCE:
-                lower_touches += 1
+        upper_touches = self.count_pivot_touches(upper_line, recent_highs)
+        lower_touches = self.count_pivot_touches(lower_line, recent_lows)
         
-        if lower_touches < self.MIN_PIVOTS_PER_LINE:
+        if upper_touches < self.MIN_PIVOTS_PER_LINE or lower_touches < self.MIN_PIVOTS_PER_LINE:
             return None
         
-        # VALIDATION 5: Check narrowing
         if not self.check_narrowing(upper_line, lower_line):
             return None
         
-        # VALIDATION 6: Check price containment
         containment = self.check_price_containment(upper_line, lower_line, candles)
         if containment < self.PRICE_CONTAINMENT_RATIO:
             return None
         
-        # All validations passed — calculate confidence
         total_touches = upper_touches + lower_touches
-        candle_touches = self.count_line_touches(upper_line, candles, "high") + \
-                         self.count_line_touches(lower_line, candles, "low")
+        candle_touches = self.count_line_touches(upper_line, candles, "high") + self.count_line_touches(lower_line, candles, "low")
         
-        # Confidence based on quality metrics
-        touch_score = min(1.0, total_touches / 6)  # Max at 6 pivots
-        containment_score = containment
-        candle_touch_score = min(1.0, candle_touches / 10)
-        
-        confidence = 0.4 + (touch_score * 0.2) + (containment_score * 0.25) + (candle_touch_score * 0.15)
+        touch_score = min(1.0, total_touches / 6)
+        line_score = min(1.0, (upper_line.score + lower_line.score) / 20)
+        confidence = 0.4 + (touch_score * 0.15) + (containment * 0.25) + (min(1.0, candle_touches / 10) * 0.1) + (line_score * 0.1)
         confidence = round(min(0.85, confidence), 2)
         
         return {
@@ -327,72 +317,44 @@ class PatternValidatorV2:
             "touches": total_touches,
             "candle_touches": candle_touches,
             "containment": round(containment, 2),
-            "points": {
-                "upper": upper_line.to_points(),
-                "lower": lower_line.to_points(),
-            },
+            "line_scores": {"upper": round(upper_line.score, 1), "lower": round(lower_line.score, 1)},
+            "points": {"upper": upper_line.to_points(), "lower": lower_line.to_points()},
             "breakout_level": round(lower_line.p2.value, 2),
             "invalidation": round(upper_line.p2.value, 2),
         }
     
-    def validate_ascending_triangle(
-        self,
-        pivot_highs: List[Pivot],
-        pivot_lows: List[Pivot],
-        candles: List[Dict]
-    ) -> Optional[Dict]:
-        """
-        Validate ASCENDING TRIANGLE.
-        
-        Requirements:
-        1. Upper boundary: NEAR-HORIZONTAL
-        2. Lower boundary: ASCENDING (slope > 0)
-        3. Min 2 pivot highs, min 2 pivot lows
-        4. Narrowing structure
-        5. Price containment >= 70%
-        """
-        if len(pivot_highs) < self.MIN_PIVOTS_PER_LINE:
-            return None
-        if len(pivot_lows) < self.MIN_PIVOTS_PER_LINE:
+    def validate_ascending_triangle(self, pivot_highs: List[Pivot], pivot_lows: List[Pivot], candles: List[Dict]) -> Optional[Dict]:
+        if len(pivot_highs) < 2 or len(pivot_lows) < 2:
             return None
         
-        recent_highs = pivot_highs[-4:] if len(pivot_highs) > 4 else pivot_highs
-        recent_lows = pivot_lows[-4:] if len(pivot_lows) > 4 else pivot_lows
+        recent_highs = pivot_highs[-5:] if len(pivot_highs) > 5 else pivot_highs
+        recent_lows = pivot_lows[-5:] if len(pivot_lows) > 5 else pivot_lows
         
-        upper_line = TrendLine.from_pivots(recent_highs[0], recent_highs[-1])
-        lower_line = TrendLine.from_pivots(recent_lows[0], recent_lows[-1])
+        upper_line = self.find_best_line(recent_highs, candles, "high", slope_constraint="horizontal")
+        lower_line = self.find_best_line(recent_lows, candles, "low", slope_constraint="ascending")
         
-        # VALIDATION 1: Upper line must be NEAR-HORIZONTAL
-        if abs(upper_line.slope_normalized) > self.HORIZONTAL_SLOPE_THRESHOLD:
+        if not upper_line or not lower_line:
             return None
         
-        # VALIDATION 2: Lower line must be ASCENDING
-        if lower_line.slope_normalized <= self.ASCENDING_SLOPE_THRESHOLD:
-            return None
-        
-        # VALIDATION 3-4: Pivot touches
-        upper_touches = sum(1 for p in recent_highs 
-                           if abs(p.value - upper_line.value_at(p.time)) / upper_line.value_at(p.time) < self.TOUCH_TOLERANCE)
-        lower_touches = sum(1 for p in recent_lows 
-                           if abs(p.value - lower_line.value_at(p.time)) / lower_line.value_at(p.time) < self.TOUCH_TOLERANCE)
+        upper_touches = self.count_pivot_touches(upper_line, recent_highs)
+        lower_touches = self.count_pivot_touches(lower_line, recent_lows)
         
         if upper_touches < self.MIN_PIVOTS_PER_LINE or lower_touches < self.MIN_PIVOTS_PER_LINE:
             return None
         
-        # VALIDATION 5: Narrowing
         if not self.check_narrowing(upper_line, lower_line):
             return None
         
-        # VALIDATION 6: Containment
         containment = self.check_price_containment(upper_line, lower_line, candles)
         if containment < self.PRICE_CONTAINMENT_RATIO:
             return None
         
         total_touches = upper_touches + lower_touches
-        candle_touches = self.count_line_touches(upper_line, candles, "high") + \
-                         self.count_line_touches(lower_line, candles, "low")
+        candle_touches = self.count_line_touches(upper_line, candles, "high") + self.count_line_touches(lower_line, candles, "low")
         
-        confidence = 0.4 + (min(1.0, total_touches / 6) * 0.2) + (containment * 0.25) + (min(1.0, candle_touches / 10) * 0.15)
+        touch_score = min(1.0, total_touches / 6)
+        line_score = min(1.0, (upper_line.score + lower_line.score) / 20)
+        confidence = 0.4 + (touch_score * 0.15) + (containment * 0.25) + (min(1.0, candle_touches / 10) * 0.1) + (line_score * 0.1)
         confidence = round(min(0.85, confidence), 2)
         
         return {
@@ -402,77 +364,50 @@ class PatternValidatorV2:
             "touches": total_touches,
             "candle_touches": candle_touches,
             "containment": round(containment, 2),
-            "points": {
-                "upper": upper_line.to_points(),
-                "lower": lower_line.to_points(),
-            },
+            "line_scores": {"upper": round(upper_line.score, 1), "lower": round(lower_line.score, 1)},
+            "points": {"upper": upper_line.to_points(), "lower": lower_line.to_points()},
             "breakout_level": round(upper_line.p2.value, 2),
             "invalidation": round(lower_line.p2.value, 2),
         }
     
-    def validate_symmetrical_triangle(
-        self,
-        pivot_highs: List[Pivot],
-        pivot_lows: List[Pivot],
-        candles: List[Dict]
-    ) -> Optional[Dict]:
-        """
-        Validate SYMMETRICAL TRIANGLE.
-        
-        Requirements:
-        1. Upper boundary: DESCENDING
-        2. Lower boundary: ASCENDING
-        3. Similar slope magnitude (converging)
-        4. Narrowing structure
-        5. Price containment >= 70%
-        """
-        if len(pivot_highs) < self.MIN_PIVOTS_PER_LINE:
-            return None
-        if len(pivot_lows) < self.MIN_PIVOTS_PER_LINE:
+    def validate_symmetrical_triangle(self, pivot_highs: List[Pivot], pivot_lows: List[Pivot], candles: List[Dict]) -> Optional[Dict]:
+        if len(pivot_highs) < 2 or len(pivot_lows) < 2:
             return None
         
-        recent_highs = pivot_highs[-4:] if len(pivot_highs) > 4 else pivot_highs
-        recent_lows = pivot_lows[-4:] if len(pivot_lows) > 4 else pivot_lows
+        recent_highs = pivot_highs[-5:] if len(pivot_highs) > 5 else pivot_highs
+        recent_lows = pivot_lows[-5:] if len(pivot_lows) > 5 else pivot_lows
         
-        upper_line = TrendLine.from_pivots(recent_highs[0], recent_highs[-1])
-        lower_line = TrendLine.from_pivots(recent_lows[0], recent_lows[-1])
+        upper_line = self.find_best_line(recent_highs, candles, "high", slope_constraint="descending")
+        lower_line = self.find_best_line(recent_lows, candles, "low", slope_constraint="ascending")
         
-        # VALIDATION 1: Upper must descend
-        if upper_line.slope_normalized >= 0:
+        if not upper_line or not lower_line:
             return None
         
-        # VALIDATION 2: Lower must ascend
-        if lower_line.slope_normalized <= 0:
+        if lower_line.slope_normalized == 0:
             return None
-        
-        # VALIDATION 3: Slopes should be roughly opposite (symmetrical)
-        slope_ratio = abs(upper_line.slope_normalized) / abs(lower_line.slope_normalized) if lower_line.slope_normalized != 0 else 999
+        slope_ratio = abs(upper_line.slope_normalized) / abs(lower_line.slope_normalized)
         if slope_ratio < 0.3 or slope_ratio > 3.0:
-            return None  # Not symmetrical enough
+            return None
         
-        # VALIDATION 4-5: Touches
-        upper_touches = sum(1 for p in recent_highs 
-                           if abs(p.value - upper_line.value_at(p.time)) / upper_line.value_at(p.time) < self.TOUCH_TOLERANCE)
-        lower_touches = sum(1 for p in recent_lows 
-                           if abs(p.value - lower_line.value_at(p.time)) / lower_line.value_at(p.time) < self.TOUCH_TOLERANCE)
+        upper_touches = self.count_pivot_touches(upper_line, recent_highs)
+        lower_touches = self.count_pivot_touches(lower_line, recent_lows)
         
         if upper_touches < self.MIN_PIVOTS_PER_LINE or lower_touches < self.MIN_PIVOTS_PER_LINE:
             return None
         
-        # VALIDATION 6: Narrowing
         if not self.check_narrowing(upper_line, lower_line):
             return None
         
-        # VALIDATION 7: Containment
         containment = self.check_price_containment(upper_line, lower_line, candles)
         if containment < self.PRICE_CONTAINMENT_RATIO:
             return None
         
         total_touches = upper_touches + lower_touches
-        candle_touches = self.count_line_touches(upper_line, candles, "high") + \
-                         self.count_line_touches(lower_line, candles, "low")
+        candle_touches = self.count_line_touches(upper_line, candles, "high") + self.count_line_touches(lower_line, candles, "low")
         
-        confidence = 0.4 + (min(1.0, total_touches / 6) * 0.2) + (containment * 0.25) + (min(1.0, candle_touches / 10) * 0.15)
+        touch_score = min(1.0, total_touches / 6)
+        line_score = min(1.0, (upper_line.score + lower_line.score) / 20)
+        confidence = 0.4 + (touch_score * 0.15) + (containment * 0.25) + (min(1.0, candle_touches / 10) * 0.1) + (line_score * 0.1)
         confidence = round(min(0.85, confidence), 2)
         
         return {
@@ -482,74 +417,49 @@ class PatternValidatorV2:
             "touches": total_touches,
             "candle_touches": candle_touches,
             "containment": round(containment, 2),
-            "points": {
-                "upper": upper_line.to_points(),
-                "lower": lower_line.to_points(),
-            },
+            "slope_ratio": round(slope_ratio, 2),
+            "line_scores": {"upper": round(upper_line.score, 1), "lower": round(lower_line.score, 1)},
+            "points": {"upper": upper_line.to_points(), "lower": lower_line.to_points()},
             "breakout_level": round((upper_line.p2.value + lower_line.p2.value) / 2, 2),
             "invalidation": None,
         }
     
-    def validate_channel(
-        self,
-        pivot_highs: List[Pivot],
-        pivot_lows: List[Pivot],
-        candles: List[Dict]
-    ) -> Optional[Dict]:
-        """
-        Validate CHANNEL pattern.
-        
-        Requirements:
-        1. Upper and lower boundaries have SAME direction (parallel)
-        2. Slope difference is small (< 50% relative)
-        3. Min 2 pivots on each line
-        4. No narrowing (it's a channel, not triangle)
-        5. Price containment >= 70%
-        """
-        if len(pivot_highs) < self.MIN_PIVOTS_PER_LINE:
-            return None
-        if len(pivot_lows) < self.MIN_PIVOTS_PER_LINE:
+    def validate_channel(self, pivot_highs: List[Pivot], pivot_lows: List[Pivot], candles: List[Dict]) -> Optional[Dict]:
+        if len(pivot_highs) < 2 or len(pivot_lows) < 2:
             return None
         
-        recent_highs = pivot_highs[-4:] if len(pivot_highs) > 4 else pivot_highs
-        recent_lows = pivot_lows[-4:] if len(pivot_lows) > 4 else pivot_lows
+        recent_highs = pivot_highs[-5:] if len(pivot_highs) > 5 else pivot_highs
+        recent_lows = pivot_lows[-5:] if len(pivot_lows) > 5 else pivot_lows
         
-        upper_line = TrendLine.from_pivots(recent_highs[0], recent_highs[-1])
-        lower_line = TrendLine.from_pivots(recent_lows[0], recent_lows[-1])
+        upper_line = self.find_best_line(recent_highs, candles, "high")
+        lower_line = self.find_best_line(recent_lows, candles, "low")
         
-        # VALIDATION 1: Same direction (both positive or both negative)
-        if upper_line.slope_normalized * lower_line.slope_normalized < 0:
-            return None  # Different directions — not a channel
+        if not upper_line or not lower_line:
+            return None
         
-        # VALIDATION 2: Parallel check (slopes within 50% of each other)
-        if upper_line.slope_normalized == 0 and lower_line.slope_normalized == 0:
-            # Both horizontal — ok
-            pass
-        elif abs(upper_line.slope_normalized) > 0.0001 and abs(lower_line.slope_normalized) > 0.0001:
-            slope_diff_ratio = abs(upper_line.slope_normalized - lower_line.slope_normalized) / \
-                               max(abs(upper_line.slope_normalized), abs(lower_line.slope_normalized))
-            if slope_diff_ratio > 0.5:
-                return None  # Not parallel enough
+        if upper_line.slope_normalized * lower_line.slope_normalized < -0.00001:
+            return None
         
-        # VALIDATION 3-4: Touches
-        upper_touches = sum(1 for p in recent_highs 
-                           if abs(p.value - upper_line.value_at(p.time)) / upper_line.value_at(p.time) < self.TOUCH_TOLERANCE)
-        lower_touches = sum(1 for p in recent_lows 
-                           if abs(p.value - lower_line.value_at(p.time)) / lower_line.value_at(p.time) < self.TOUCH_TOLERANCE)
+        if abs(upper_line.slope_normalized) > 0.0001 or abs(lower_line.slope_normalized) > 0.0001:
+            max_slope = max(abs(upper_line.slope_normalized), abs(lower_line.slope_normalized))
+            if max_slope > 0:
+                slope_diff_ratio = abs(upper_line.slope_normalized - lower_line.slope_normalized) / max_slope
+                if slope_diff_ratio > 0.5:
+                    return None
+        
+        upper_touches = self.count_pivot_touches(upper_line, recent_highs)
+        lower_touches = self.count_pivot_touches(lower_line, recent_lows)
         
         if upper_touches < self.MIN_PIVOTS_PER_LINE or lower_touches < self.MIN_PIVOTS_PER_LINE:
             return None
         
-        # VALIDATION 5: Should NOT be narrowing (that would be triangle)
         if self.check_narrowing(upper_line, lower_line):
-            return None  # It's a triangle, not channel
+            return None
         
-        # VALIDATION 6: Containment
         containment = self.check_price_containment(upper_line, lower_line, candles)
         if containment < self.PRICE_CONTAINMENT_RATIO:
             return None
         
-        # Determine channel type
         avg_slope = (upper_line.slope_normalized + lower_line.slope_normalized) / 2
         
         if avg_slope > 0.0003:
@@ -563,10 +473,11 @@ class PatternValidatorV2:
             direction = "neutral"
         
         total_touches = upper_touches + lower_touches
-        candle_touches = self.count_line_touches(upper_line, candles, "high") + \
-                         self.count_line_touches(lower_line, candles, "low")
+        candle_touches = self.count_line_touches(upper_line, candles, "high") + self.count_line_touches(lower_line, candles, "low")
         
-        confidence = 0.4 + (min(1.0, total_touches / 6) * 0.2) + (containment * 0.25) + (min(1.0, candle_touches / 10) * 0.15)
+        touch_score = min(1.0, total_touches / 6)
+        line_score = min(1.0, (upper_line.score + lower_line.score) / 20)
+        confidence = 0.4 + (touch_score * 0.15) + (containment * 0.25) + (min(1.0, candle_touches / 10) * 0.1) + (line_score * 0.1)
         confidence = round(min(0.85, confidence), 2)
         
         return {
@@ -576,62 +487,47 @@ class PatternValidatorV2:
             "touches": total_touches,
             "candle_touches": candle_touches,
             "containment": round(containment, 2),
-            "points": {
-                "upper": upper_line.to_points(),
-                "lower": lower_line.to_points(),
-            },
+            "line_scores": {"upper": round(upper_line.score, 1), "lower": round(lower_line.score, 1)},
+            "points": {"upper": upper_line.to_points(), "lower": lower_line.to_points()},
             "breakout_level": round(upper_line.p2.value if direction != "bearish" else lower_line.p2.value, 2),
             "invalidation": round(lower_line.p2.value if direction == "bullish" else upper_line.p2.value, 2),
         }
     
-    # =========================================================================
-    # MAIN DETECTION METHOD
-    # =========================================================================
-    
     def detect_best_pattern(self, candles: List[Dict]) -> Optional[Dict]:
-        """
-        Try all pattern validators and return the best valid one.
-        
-        Returns None if no valid pattern found.
-        
-        RULE: Better to return nothing than garbage.
-        """
         if len(candles) < 30:
             return None
         
-        # Find pivots
         pivot_highs, pivot_lows = self.find_pivots(candles)
         
         if len(pivot_highs) < 2 or len(pivot_lows) < 2:
             return None
         
+        recent_candles = self._recent_candles if self._recent_candles else candles[-self.pattern_window:]
+        
         patterns = []
         
-        # Try each validator
-        result = self.validate_descending_triangle(pivot_highs, pivot_lows, candles)
+        result = self.validate_descending_triangle(pivot_highs, pivot_lows, recent_candles)
         if result:
             patterns.append(result)
         
-        result = self.validate_ascending_triangle(pivot_highs, pivot_lows, candles)
+        result = self.validate_ascending_triangle(pivot_highs, pivot_lows, recent_candles)
         if result:
             patterns.append(result)
         
-        result = self.validate_symmetrical_triangle(pivot_highs, pivot_lows, candles)
+        result = self.validate_symmetrical_triangle(pivot_highs, pivot_lows, recent_candles)
         if result:
             patterns.append(result)
         
-        result = self.validate_channel(pivot_highs, pivot_lows, candles)
+        result = self.validate_channel(pivot_highs, pivot_lows, recent_candles)
         if result:
             patterns.append(result)
         
         if not patterns:
             return None
         
-        # Return highest confidence pattern
-        patterns.sort(key=lambda p: p["confidence"], reverse=True)
+        patterns.sort(key=lambda p: (p["confidence"], p.get("line_scores", {}).get("upper", 0) + p.get("line_scores", {}).get("lower", 0)), reverse=True)
         return patterns[0]
 
 
-# Factory function
 def get_pattern_validator_v2(timeframe: str = "1D") -> PatternValidatorV2:
     return PatternValidatorV2(timeframe)

@@ -193,6 +193,7 @@ const ResearchChart = ({
     priceSeries.setData(mapped);
 
     // 2. RENDER PATTERN GEOMETRY (channel/triangle lines)
+    // RULE: Render EXACTLY 2 points per line, no broken segments
     if (showPattern && pattern?.points) {
       const { upper, lower } = pattern.points;
       
@@ -212,58 +213,46 @@ const ResearchChart = ({
         return null;
       };
       
-      // Upper trendline
+      // Upper trendline - EXACTLY 2 points
       if (upper && upper.length >= 2) {
         const upperSeries = chart.addSeries(LineSeries, {
           color: COLORS.patternUpper,
           lineWidth: 2,
-          lineStyle: 0, // Solid line for pattern
+          lineStyle: 0,
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
         });
         
-        const upperData = upper
-          .map(parsePoint)
-          .filter(d => d && d.time > 0 && d.value > 0)
-          .sort((a, b) => a.time - b.time);
+        // Parse only first 2 points
+        const p1 = parsePoint(upper[0]);
+        const p2 = parsePoint(upper[upper.length > 1 ? 1 : 0]);
         
-        if (upperData.length >= 2) {
-          // Extend line into future
-          const lastPoint = upperData[upperData.length - 1];
-          const slope = (upperData[1].value - upperData[0].value) / (upperData[1].time - upperData[0].time);
-          const futureTime = lastPoint.time + 30 * 86400; // +30 days
-          const futureValue = lastPoint.value + slope * (futureTime - lastPoint.time);
-          upperData.push({ time: futureTime, value: futureValue });
-          
+        if (p1 && p2 && p1.time > 0 && p2.time > 0 && p1.value > 0 && p2.value > 0) {
+          // Use exactly 2 points - NO extension that could create broken segments
+          const upperData = [p1, p2].sort((a, b) => a.time - b.time);
           upperSeries.setData(upperData);
         }
       }
       
-      // Lower trendline
+      // Lower trendline - EXACTLY 2 points
       if (lower && lower.length >= 2) {
         const lowerSeries = chart.addSeries(LineSeries, {
           color: COLORS.patternLower,
           lineWidth: 2,
-          lineStyle: 0, // Solid line for pattern
+          lineStyle: 0,
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
         });
         
-        const lowerData = lower
-          .map(parsePoint)
-          .filter(d => d && d.time > 0 && d.value > 0)
-          .sort((a, b) => a.time - b.time);
+        // Parse only first 2 points
+        const p1 = parsePoint(lower[0]);
+        const p2 = parsePoint(lower[lower.length > 1 ? 1 : 0]);
         
-        if (lowerData.length >= 2) {
-          // Extend line into future
-          const lastPoint = lowerData[lowerData.length - 1];
-          const slope = (lowerData[1].value - lowerData[0].value) / (lowerData[1].time - lowerData[0].time);
-          const futureTime = lastPoint.time + 30 * 86400;
-          const futureValue = lastPoint.value + slope * (futureTime - lastPoint.time);
-          lowerData.push({ time: futureTime, value: futureValue });
-          
+        if (p1 && p2 && p1.time > 0 && p2.time > 0 && p1.value > 0 && p2.value > 0) {
+          // Use exactly 2 points - NO extension
+          const lowerData = [p1, p2].sort((a, b) => a.time - b.time);
           lowerSeries.setData(lowerData);
         }
       }

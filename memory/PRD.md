@@ -31,28 +31,26 @@
 - Documented structure engine, level engine, indicator engine
 - Documented setup builder confluence scoring system
 
-### Session 4: Pattern Validation Engine (December 2025)
-**Implemented PIVOT-BASED pattern detection with strict validation:**
+### Session 4: Pattern Validation Engine v2 (December 2025)
+**Implemented STRICT per-pattern validators:**
 
-#### New: `pattern_validation_engine.py`
-- **Pivot detection**: Window-based swing high/low detection (5 candles for 1D)
-- **Line building**: Trendlines built ONLY from pivot points
-- **Validation**:
-  - Minimum 3 touches required
-  - Parallel check for channels (±15% slope difference)
-  - 1.5% tolerance for touch detection
-  - Price must be inside pattern
-- **Fail-safe**: Returns `None` if no valid pattern (better than garbage)
+#### New: `pattern_validator_v2.py`
+- **Separate validators** for each pattern type:
+  - `validate_descending_triangle()`: Upper descending + Lower horizontal + 2+ pivot touches + narrowing + 70% containment
+  - `validate_ascending_triangle()`: Upper horizontal + Lower ascending + same validation
+  - `validate_symmetrical_triangle()`: Upper descending + Lower ascending + slope symmetry
+  - `validate_channel()`: Parallel slopes + no narrowing
+- **Strict criteria**: If ANY validation fails → return `None`
+- **Quality-based confidence**: Based on touches, containment, slope quality (not random)
 
 #### Results:
-- BTC 1D: Descending Triangle 85% (16 touches)
-- ETH 1D: Descending Triangle 85%
-- 30D: No valid pattern (fail-safe works)
+- BTC 1D: Symmetrical Triangle 85%, 4 touches, 100% containment
+- 30D: **No valid pattern** (fail-safe works!)
+- No more vertical line artifacts
 
-#### Key changes:
-- Replaced random confidence with touch-based confidence
-- Timeframe-aware pivot windows (4H=3, 1D=5, 7D=7...)
-- Triangle vs Channel differentiation (converging vs parallel)
+#### Known limitation:
+- Pattern lines not visible on full chart (2019-2026 scale)
+- Need zoom-to-pattern feature (P1)
 
 ## Core Features Working
 1. Pattern detection (ascending/descending channel, triangle, range)

@@ -5,7 +5,7 @@ TA Setup API — Minimal Working Pipeline
 Returns clean, structured setup data for Research page.
 NO trading terminal semantics. Pure technical analysis.
 
-Now uses PatternValidationEngine for PIVOT-BASED detection.
+Now uses PatternValidatorV2 for STRICT validation.
 """
 
 from fastapi import APIRouter, Query
@@ -15,38 +15,33 @@ import random
 
 router = APIRouter(prefix="/api/ta", tags=["TA Setup"])
 
-# Import pattern validation engine
-from modules.ta_engine.setup.pattern_validation_engine import get_pattern_validation_engine
+# Import STRICT pattern validator v2
+from modules.ta_engine.setup.pattern_validator_v2 import get_pattern_validator_v2
 
 
 def detect_pattern(candles: List[Dict], symbol: str, tf: str) -> Dict:
     """
     Detect strongest VALID pattern from candles.
-    Uses pivot-based validation.
+    Uses strict per-pattern validators.
     
     Returns: { type, confidence, points } or None if no valid pattern.
+    
+    RULE: Better to return nothing than garbage.
     """
-    if len(candles) < 20:
+    if len(candles) < 30:
         return None
     
-    # Get validation engine for this timeframe
-    engine = get_pattern_validation_engine(tf.upper())
+    # Get strict validator for this timeframe
+    validator = get_pattern_validator_v2(tf.upper())
     
     # Detect best valid pattern
-    pattern = engine.detect_best_pattern(candles)
+    pattern = validator.detect_best_pattern(candles)
     
     if pattern is None:
-        # FAIL-SAFE: No valid pattern found
-        # Return None — better to show nothing than garbage
+        # No valid pattern found — this is correct behavior
         return None
     
-    # Convert to API format
-    return {
-        "type": pattern["type"],
-        "confidence": pattern["confidence"],
-        "touches": pattern.get("touches", 0),
-        "points": pattern["points"]
-    }
+    return pattern
 
 
 def detect_levels(candles: List[Dict]) -> List[Dict]:

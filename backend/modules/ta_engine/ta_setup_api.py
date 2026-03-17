@@ -31,46 +31,52 @@ from modules.ta_engine.setup.pattern_validator_v2 import get_pattern_validator_v
 
 TF_CONFIG = {
     "4H": {
-        "lookback": 120,        # ~20 days of 4H candles
-        "pivot_window": 3,      # Sensitive pivot detection
+        "lookback": 200,        # ~33 days of 4H candles (limited by Coinbase API)
+        "pivot_window": 3,      # Very sensitive - микро структуры
         "min_pivot_distance": 5,
-        "pattern_window": 80,
-        "description": "Intraday patterns"
+        "pattern_window": 150,
+        "candle_type": "4h",    # Uses 4H candles!
+        "description": "Micro structure / entry points"
     },
     "1D": {
         "lookback": 150,        # ~5 months of daily
         "pivot_window": 5,      # Standard sensitivity
         "min_pivot_distance": 8,
         "pattern_window": 100,
-        "description": "Short-term patterns"
+        "candle_type": "1d",
+        "description": "Short-term / setup patterns"
     },
     "7D": {
         "lookback": 400,        # ~1.5 years of daily
         "pivot_window": 9,      # Less sensitive (bigger swings)
         "min_pivot_distance": 15,
         "pattern_window": 250,
-        "description": "Medium-term patterns"
+        "candle_type": "1d",
+        "description": "Medium-term / formation patterns"
     },
     "30D": {
         "lookback": 800,        # ~3 years of daily
         "pivot_window": 15,     # Only major swings
         "min_pivot_distance": 30,
         "pattern_window": 500,
-        "description": "Long-term patterns"
+        "candle_type": "1d",
+        "description": "Long-term / structure patterns"
     },
     "180D": {
         "lookback": 1500,       # ~6 years of daily
         "pivot_window": 25,     # Macro swings only
         "min_pivot_distance": 60,
         "pattern_window": 800,
-        "description": "Macro patterns"
+        "candle_type": "1d",
+        "description": "Macro / trend patterns"
     },
     "1Y": {
-        "lookback": 2500,       # ~10 years of daily
-        "pivot_window": 40,     # Cycle-level swings
+        "lookback": 2500,       # ~10 years of daily - FULL HISTORY
+        "pivot_window": 40,     # Cycle-level swings only
         "min_pivot_distance": 100,
-        "pattern_window": 1200,
-        "description": "Cycle-level patterns"
+        "pattern_window": 1500,
+        "candle_type": "1d",
+        "description": "Cycle-level / global context"
     }
 }
 
@@ -330,6 +336,8 @@ async def get_ta_setup(
         candles.sort(key=lambda x: x['time'])
         
     except Exception as e:
+        # Log the error
+        print(f"[ERROR] Failed to fetch candles for {clean_symbol} {normalized_tf}: {e}")
         # Fallback: generate mock data
         import time
         base_time = int(time.time()) - 86400 * config["lookback"]

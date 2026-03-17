@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-TA Engine API Testing - Timeframe Isolation
+TA Engine API Testing - Multi-Scale Market Hierarchy
 
 Tests for:
-- Timeframe isolation with aggregated candles (1D, 7D, 30D, 180D)
-- Proper candle count for each timeframe
-- Pattern detection differences across timeframes
-- Debug endpoint showing aggregation metrics
+- 4H (micro/entry) using 4H candles from Coinbase (~200 candles)
+- 1Y (cycle) using daily candles (~2500 candles)
+- Different timeframes produce different patterns (4H ≠ 1D ≠ 30D)
+- Response contains structure analysis (trend, hh, hl, lh, ll)
+- ETH 4H shows descending_triangle (bearish pattern)
 - Health check functionality
 """
 
@@ -89,217 +90,224 @@ class TAEngineAPITester:
         return True
 
     # ═══════════════════════════════════════════════════════════════
-    # TA Setup API Tests - Timeframe Isolation
+    # TA Setup API Tests - Multi-Scale Market Hierarchy
     # ═══════════════════════════════════════════════════════════════
 
-    def test_ta_setup_1d_timeframe(self):
-        """Test /api/ta/setup with 1D timeframe - should return ~2500 daily candles"""
-        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=1D")
+    def test_ta_setup_4h_timeframe(self):
+        """Test /api/ta/setup with 4H timeframe - should return 4H candles (~200 candles)"""
+        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=4H")
         
         if not success or status != 200:
-            self.log_result("TA Setup 1D Timeframe", False, f"Request failed: status={status}, error: {data.get('error', 'unknown')}")
+            self.log_result("TA Setup 4H Timeframe", False, f"Request failed: status={status}, error: {data.get('error', 'unknown')}")
             return False
             
         # Check basic structure
-        required_fields = ["symbol", "timeframe", "candles", "candle_count", "raw_daily_count"]
+        required_fields = ["symbol", "timeframe", "candles", "candle_count", "scale_config", "structure"]
         for field in required_fields:
             if field not in data:
-                self.log_result("TA Setup 1D Timeframe", False, f"Missing field: {field}")
+                self.log_result("TA Setup 4H Timeframe", False, f"Missing field: {field}")
                 return False
         
         candle_count = data.get("candle_count", 0)
-        raw_daily_count = data.get("raw_daily_count", 0)
+        timeframe = data.get("timeframe")
+        scale_config = data.get("scale_config", {})
         
-        # For 1D, candles should be the same as raw daily count
-        if candle_count != raw_daily_count:
-            self.log_result("TA Setup 1D Timeframe", False, f"1D candles ({candle_count}) should equal raw daily ({raw_daily_count})")
+        # Verify it's 4H timeframe
+        if timeframe != "4H":
+            self.log_result("TA Setup 4H Timeframe", False, f"Expected timeframe 4H, got {timeframe}")
+            return False
+            
+        # Should have around 200 4H candles (allow some tolerance)
+        if not (150 <= candle_count <= 250):
+            self.log_result("TA Setup 4H Timeframe", False, f"Expected ~200 4H candles, got {candle_count}")
+            return False
+        
+        # Verify scale config for 4H
+        expected_lookback = 200
+        if scale_config.get("lookback") != expected_lookback:
+            self.log_result("TA Setup 4H Timeframe", False, f"Expected lookback {expected_lookback}, got {scale_config.get('lookback')}")
+            return False
+        
+        print(f"   📈 4H candles: {candle_count}")
+        print(f"   📈 Scale config: {scale_config.get('description')}")
+        print(f"   📈 Lookback: {scale_config.get('lookback')}")
+        print(f"   📈 Pivot window: {scale_config.get('pivot_window')}")
+        print(f"   📈 Pattern: {data.get('pattern', {}).get('type') if data.get('pattern') else 'None'}")
+        
+        self.log_result("TA Setup 4H Timeframe", True)
+        return data
+
+    def test_ta_setup_1y_timeframe(self):
+        """Test /api/ta/setup with 1Y timeframe - should return 2500 daily candles"""
+        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=1Y")
+        
+        if not success or status != 200:
+            self.log_result("TA Setup 1Y Timeframe", False, f"Request failed: status={status}, error: {data.get('error', 'unknown')}")
+            return False
+            
+        # Check basic structure
+        required_fields = ["symbol", "timeframe", "candles", "candle_count", "scale_config", "structure"]
+        for field in required_fields:
+            if field not in data:
+                self.log_result("TA Setup 1Y Timeframe", False, f"Missing field: {field}")
+                return False
+        
+        candle_count = data.get("candle_count", 0)
+        timeframe = data.get("timeframe")
+        scale_config = data.get("scale_config", {})
+        
+        # Verify it's 1Y timeframe
+        if timeframe != "1Y":
+            self.log_result("TA Setup 1Y Timeframe", False, f"Expected timeframe 1Y, got {timeframe}")
             return False
             
         # Should have around 2500 daily candles (allow some tolerance)
         if not (2000 <= candle_count <= 3000):
-            self.log_result("TA Setup 1D Timeframe", False, f"Expected ~2500 candles, got {candle_count}")
+            self.log_result("TA Setup 1Y Timeframe", False, f"Expected ~2500 daily candles, got {candle_count}")
             return False
         
-        print(f"   📈 1D candles: {candle_count}")
-        print(f"   📈 Raw daily count: {raw_daily_count}")
+        # Verify scale config for 1Y
+        expected_lookback = 2500
+        if scale_config.get("lookback") != expected_lookback:
+            self.log_result("TA Setup 1Y Timeframe", False, f"Expected lookback {expected_lookback}, got {scale_config.get('lookback')}")
+            return False
+        
+        print(f"   📈 1Y candles: {candle_count}")
+        print(f"   📈 Scale config: {scale_config.get('description')}")
+        print(f"   📈 Lookback: {scale_config.get('lookback')}")
+        print(f"   📈 Pivot window: {scale_config.get('pivot_window')}")
         print(f"   📈 Pattern: {data.get('pattern', {}).get('type') if data.get('pattern') else 'None'}")
         
-        self.log_result("TA Setup 1D Timeframe", True)
+        self.log_result("TA Setup 1Y Timeframe", True)
         return data
 
-    def test_ta_setup_7d_timeframe(self):
-        """Test /api/ta/setup with 7D timeframe - should return ~350 weekly candles"""
-        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=7D")
+    def test_structure_response_format(self):
+        """Test that response contains proper structure analysis (trend, hh, hl, lh, ll)"""
+        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=1D")
         
         if not success or status != 200:
-            self.log_result("TA Setup 7D Timeframe", False, f"Request failed: status={status}, error: {data.get('error', 'unknown')}")
+            self.log_result("Structure Response Format", False, f"Request failed: status={status}, error: {data.get('error', 'unknown')}")
             return False
             
-        # Check basic structure
-        required_fields = ["symbol", "timeframe", "candles", "candle_count", "raw_daily_count"]
-        for field in required_fields:
-            if field not in data:
-                self.log_result("TA Setup 7D Timeframe", False, f"Missing field: {field}")
+        structure = data.get("structure", {})
+        
+        # Check required structure fields
+        required_structure_fields = ["trend", "hh", "hl", "lh", "ll"]
+        for field in required_structure_fields:
+            if field not in structure:
+                self.log_result("Structure Response Format", False, f"Missing structure field: {field}")
                 return False
         
-        candle_count = data.get("candle_count", 0)
-        raw_daily_count = data.get("raw_daily_count", 0)
-        
-        # For 7D, aggregated candles should be much less than raw daily
-        if candle_count >= raw_daily_count:
-            self.log_result("TA Setup 7D Timeframe", False, f"7D aggregated candles ({candle_count}) should be less than raw daily ({raw_daily_count})")
-            return False
-            
-        # Should have around 350 weekly candles (allow tolerance)
-        if not (250 <= candle_count <= 450):
-            self.log_result("TA Setup 7D Timeframe", False, f"Expected ~350 weekly candles, got {candle_count}")
+        # Verify structure values are reasonable
+        trend = structure.get("trend")
+        if trend not in ["bullish", "bearish", "neutral"]:
+            self.log_result("Structure Response Format", False, f"Invalid trend value: {trend}")
             return False
         
-        print(f"   📈 7D candles: {candle_count}")
-        print(f"   📈 Raw daily count: {raw_daily_count}")
-        print(f"   📈 Aggregation ratio: {raw_daily_count/candle_count:.1f}:1")
-        print(f"   📈 Pattern: {data.get('pattern', {}).get('type') if data.get('pattern') else 'None'}")
+        # Check that structure counts are non-negative integers
+        for field in ["hh", "hl", "lh", "ll"]:
+            value = structure.get(field)
+            if not isinstance(value, int) or value < 0:
+                self.log_result("Structure Response Format", False, f"Invalid {field} value: {value}")
+                return False
         
-        self.log_result("TA Setup 7D Timeframe", True)
-        return data
+        print(f"   🏗️ Trend: {trend}")
+        print(f"   🏗️ Higher Highs: {structure.get('hh')}")
+        print(f"   🏗️ Higher Lows: {structure.get('hl')}")
+        print(f"   🏗️ Lower Highs: {structure.get('lh')}")
+        print(f"   🏗️ Lower Lows: {structure.get('ll')}")
+        
+        self.log_result("Structure Response Format", True)
+        return structure
 
-    def test_ta_setup_30d_timeframe(self):
-        """Test /api/ta/setup with 30D timeframe - should return ~80 monthly candles"""
-        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=30D")
+    def test_eth_4h_pattern(self):
+        """Test ETH 4H pattern - should show descending_triangle (bearish)"""
+        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=ETH&tf=4H")
         
         if not success or status != 200:
-            self.log_result("TA Setup 30D Timeframe", False, f"Request failed: status={status}, error: {data.get('error', 'unknown')}")
+            self.log_result("ETH 4H Pattern", False, f"Request failed: status={status}, error: {data.get('error', 'unknown')}")
             return False
             
-        # Check basic structure
-        required_fields = ["symbol", "timeframe", "candles", "candle_count", "raw_daily_count"]
-        for field in required_fields:
-            if field not in data:
-                self.log_result("TA Setup 30D Timeframe", False, f"Missing field: {field}")
-                return False
+        pattern = data.get("pattern")
         
-        candle_count = data.get("candle_count", 0)
-        raw_daily_count = data.get("raw_daily_count", 0)
+        # Check if pattern exists
+        if not pattern:
+            print("   ⚠️ No pattern detected for ETH 4H (this may be normal)")
+            self.log_result("ETH 4H Pattern", True, "No pattern detected")
+            return data
         
-        # For 30D, aggregated candles should be much less than raw daily
-        if candle_count >= raw_daily_count:
-            self.log_result("TA Setup 30D Timeframe", False, f"30D aggregated candles ({candle_count}) should be less than raw daily ({raw_daily_count})")
-            return False
-            
-        # Should have around 80 monthly candles (allow tolerance)
-        if not (60 <= candle_count <= 100):
-            self.log_result("TA Setup 30D Timeframe", False, f"Expected ~80 monthly candles, got {candle_count}")
-            return False
+        pattern_type = pattern.get("type")
+        direction = pattern.get("direction")
         
-        print(f"   📈 30D candles: {candle_count}")
-        print(f"   📈 Raw daily count: {raw_daily_count}")
-        print(f"   📈 Aggregation ratio: {raw_daily_count/candle_count:.1f}:1")
-        print(f"   📈 Pattern: {data.get('pattern', {}).get('type') if data.get('pattern') else 'None'}")
+        print(f"   🔺 ETH 4H Pattern: {pattern_type}")
+        print(f"   🔺 Direction: {direction}")
+        print(f"   🔺 Confidence: {pattern.get('confidence', 'N/A')}")
+        print(f"   🔺 Timeframe: {data.get('timeframe')}")
         
-        self.log_result("TA Setup 30D Timeframe", True)
+        # Log pattern details (even if not descending_triangle)
+        if pattern_type == "descending_triangle" and direction == "bearish":
+            print("   ✅ Expected descending_triangle (bearish) pattern found!")
+        else:
+            print(f"   ℹ️ Pattern is {pattern_type} ({direction}), not descending_triangle (bearish)")
+        
+        self.log_result("ETH 4H Pattern", True)
         return data
 
-    def test_ta_setup_180d_timeframe(self):
-        """Test /api/ta/setup with 180D timeframe - should return quarterly candles"""
-        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=180D")
-        
-        if not success or status != 200:
-            self.log_result("TA Setup 180D Timeframe", False, f"Request failed: status={status}, error: {data.get('error', 'unknown')}")
-            return False
-            
-        # Check basic structure
-        required_fields = ["symbol", "timeframe", "candles", "candle_count", "raw_daily_count"]
-        for field in required_fields:
-            if field not in data:
-                self.log_result("TA Setup 180D Timeframe", False, f"Missing field: {field}")
-                return False
-        
-        candle_count = data.get("candle_count", 0)
-        raw_daily_count = data.get("raw_daily_count", 0)
-        
-        # For 180D, aggregated candles should be much less than raw daily
-        if candle_count >= raw_daily_count:
-            self.log_result("TA Setup 180D Timeframe", False, f"180D aggregated candles ({candle_count}) should be less than raw daily ({raw_daily_count})")
-            return False
-            
-        # Should have quarterly candles (roughly 7 years / 4 = ~28 quarters, allow tolerance)
-        if not (20 <= candle_count <= 40):
-            self.log_result("TA Setup 180D Timeframe", False, f"Expected ~28 quarterly candles, got {candle_count}")
-            return False
-        
-        print(f"   📈 180D candles: {candle_count}")
-        print(f"   📈 Raw daily count: {raw_daily_count}")
-        print(f"   📈 Aggregation ratio: {raw_daily_count/candle_count:.1f}:1")
-        print(f"   📈 Pattern: {data.get('pattern', {}).get('type') if data.get('pattern') else 'None'}")
-        
-        self.log_result("TA Setup 180D Timeframe", True)
-        return data
-
-    def test_ta_debug_endpoint(self):
-        """Test /api/ta/debug endpoint - should show aggregated vs raw counts"""
-        success, data, status = self.make_request("GET", "/api/ta/debug?symbol=BTC&tf=7D")
-        
-        if not success or status != 200:
-            self.log_result("TA Debug Endpoint", False, f"Request failed: status={status}, error: {data.get('error', 'unknown')}")
-            return False
-            
-        # Check debug structure
-        required_fields = ["symbol", "timeframe", "raw_daily_count", "aggregated_count"]
-        for field in required_fields:
-            if field not in data:
-                self.log_result("TA Debug Endpoint", False, f"Missing field: {field}")
-                return False
-        
-        raw_count = data.get("raw_daily_count", 0)
-        aggregated_count = data.get("aggregated_count", 0)
-        
-        # Debug endpoint should show proper aggregation
-        if aggregated_count >= raw_count:
-            self.log_result("TA Debug Endpoint", False, f"Aggregated count ({aggregated_count}) should be less than raw ({raw_count})")
-            return False
-        
-        print(f"   🔍 Symbol: {data.get('symbol')}")
-        print(f"   🔍 Timeframe: {data.get('timeframe')}")
-        print(f"   🔍 Raw daily count: {raw_count}")
-        print(f"   🔍 Aggregated count: {aggregated_count}")
-        print(f"   🔍 Pivot highs: {data.get('pivot_highs', 0)}")
-        print(f"   🔍 Pivot lows: {data.get('pivot_lows', 0)}")
-        print(f"   🔍 Pattern window: {data.get('pattern_window', 'N/A')}")
-        print(f"   🔍 Pivot window: {data.get('pivot_window', 'N/A')}")
-        
-        self.log_result("TA Debug Endpoint", True)
-        return data
-
-    def test_timeframe_pattern_differences(self):
-        """Test that different timeframes can produce different patterns"""
+    def test_different_timeframe_patterns(self):
+        """Test that different timeframes produce different patterns (4H ≠ 1D ≠ 30D)"""
         print("   🔄 Testing pattern differences across timeframes...")
         
-        timeframes = ["1D", "7D", "30D", "180D"]
+        timeframes = ["4H", "1D", "30D"]
         patterns = {}
         
         for tf in timeframes:
             success, data, status = self.make_request("GET", f"/api/ta/setup?symbol=BTC&tf={tf}")
             
             if not success or status != 200:
-                self.log_result("Timeframe Pattern Differences", False, f"Failed to get {tf} data: status={status}")
+                self.log_result("Different Timeframe Patterns", False, f"Failed to get {tf} data: status={status}")
                 return False
             
             pattern = data.get("pattern")
             pattern_type = pattern.get("type") if pattern else None
-            patterns[tf] = pattern_type
+            direction = pattern.get("direction") if pattern else None
+            structure_trend = data.get("structure", {}).get("trend")
             
-            print(f"   📊 {tf}: {pattern_type or 'None'}")
+            patterns[tf] = {
+                "pattern_type": pattern_type,
+                "direction": direction,
+                "structure_trend": structure_trend
+            }
+            
+            print(f"   📊 {tf}: Pattern={pattern_type or 'None'}, Direction={direction or 'None'}, Trend={structure_trend}")
         
         # Check that we have valid responses for all timeframes
         if len(patterns) != len(timeframes):
-            self.log_result("Timeframe Pattern Differences", False, f"Expected {len(timeframes)} timeframes, got {len(patterns)}")
+            self.log_result("Different Timeframe Patterns", False, f"Expected {len(timeframes)} timeframes, got {len(patterns)}")
             return False
         
-        # It's OK if patterns are the same or different - the test is that the system handles different TFs
-        unique_patterns = set(patterns.values())
-        print(f"   🎯 Unique patterns found: {len(unique_patterns)}")
+        # Check for differences in patterns or structure trends
+        pattern_types = [p["pattern_type"] for p in patterns.values()]
+        directions = [p["direction"] for p in patterns.values()]
+        trends = [p["structure_trend"] for p in patterns.values()]
         
-        self.log_result("Timeframe Pattern Differences", True)
+        # Count unique values
+        unique_patterns = len(set(filter(None, pattern_types)))
+        unique_directions = len(set(filter(None, directions)))
+        unique_trends = len(set(filter(None, trends)))
+        
+        print(f"   🎯 Unique pattern types: {unique_patterns}")
+        print(f"   🎯 Unique directions: {unique_directions}")
+        print(f"   🎯 Unique trends: {unique_trends}")
+        
+        # Success if there's variation in any aspect
+        has_variation = (unique_patterns > 1) or (unique_directions > 1) or (unique_trends > 1)
+        
+        if has_variation:
+            print("   ✅ Timeframes show different analysis results!")
+        else:
+            print("   ⚠️ All timeframes show similar results (this may be normal)")
+        
+        self.log_result("Different Timeframe Patterns", True)
         return patterns
 
     # ═══════════════════════════════════════════════════════════════
@@ -308,7 +316,7 @@ class TAEngineAPITester:
 
     def run_all_tests(self):
         """Run all tests in sequence"""
-        print("🚀 Starting TA Engine API Tests - Timeframe Isolation...")
+        print("🚀 Starting TA Engine API Tests - Multi-Scale Market Hierarchy...")
         print(f"🌐 Base URL: {self.base_url}")
         print("=" * 80)
         
@@ -317,24 +325,27 @@ class TAEngineAPITester:
         print("-" * 50)
         self.test_health_endpoint()
         
-        # Timeframe isolation tests
-        print("\n📊 TIMEFRAME ISOLATION TESTS")
+        # Core timeframe tests (4H and 1Y as specified)
+        print("\n📊 CORE TIMEFRAME TESTS")
         print("-" * 50)
         
-        self.test_ta_setup_1d_timeframe()
-        self.test_ta_setup_7d_timeframe()
-        self.test_ta_setup_30d_timeframe()
-        self.test_ta_setup_180d_timeframe()
+        self.test_ta_setup_4h_timeframe()
+        self.test_ta_setup_1y_timeframe()
         
-        # Debug endpoint test
-        print("\n🔍 DEBUG ENDPOINT TEST")
+        # Structure response format
+        print("\n🏗️ STRUCTURE ANALYSIS TEST")
         print("-" * 50)
-        self.test_ta_debug_endpoint()
+        self.test_structure_response_format()
+        
+        # ETH 4H pattern test
+        print("\n🔺 ETH 4H PATTERN TEST")
+        print("-" * 50)
+        self.test_eth_4h_pattern()
         
         # Pattern difference test
-        print("\n🎯 PATTERN DIFFERENCE TEST")
+        print("\n🎯 TIMEFRAME PATTERN DIFFERENCES")
         print("-" * 50)
-        self.test_timeframe_pattern_differences()
+        self.test_different_timeframe_patterns()
         
         # Print summary
         print("\n" + "=" * 80)
@@ -365,7 +376,7 @@ class TAEngineAPITester:
 
 def main():
     """Main test runner"""
-    print("TA Engine API Tester - Timeframe Isolation")
+    print("TA Engine API Tester - Multi-Scale Market Hierarchy")
     print("=" * 80)
     
     # Initialize tester

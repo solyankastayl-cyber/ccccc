@@ -106,7 +106,6 @@ class PatternValidatorV2:
     HORIZONTAL_SLOPE_THRESHOLD = 0.0003
     TOUCH_TOLERANCE = 0.008  # 0.8%
     MIN_PIVOTS_PER_LINE = 2
-    MIN_PIVOT_DISTANCE = 10
     PRICE_CONTAINMENT_RATIO = 0.70
     
     # P0.4: Violation thresholds (усиленные)
@@ -117,11 +116,40 @@ class PatternValidatorV2:
     MIN_CONFIDENCE = 0.60  # не показываем паттерн если ниже
     
     def __init__(self, timeframe: str = "1D"):
-        self.pivot_windows = {"4H": 3, "1D": 5, "7D": 7, "30D": 10}
+        # Pivot window = how many candles on each side to confirm a pivot
+        # For higher TF with fewer candles, we need smaller windows
+        self.pivot_windows = {
+            "4H": 3,    # ~166 candles, need 3 on each side
+            "1D": 5,    # ~2500 candles, need 5 on each side
+            "7D": 3,    # ~350 candles (weekly), need 3 on each side
+            "30D": 2,   # ~80 candles (monthly), need 2 on each side
+            "180D": 2,  # ~28 candles (quarterly), need 2 on each side
+            "1Y": 1     # ~8 candles (yearly), need 1 on each side
+        }
         self.pivot_window = self.pivot_windows.get(timeframe.upper(), 5)
         
-        self.pattern_windows = {"4H": 80, "1D": 120, "7D": 100, "30D": 80}
+        # Pattern window = how many recent candles to analyze for patterns
+        # For higher TF, we use ALL available candles
+        self.pattern_windows = {
+            "4H": 80,   # Last 80 4H candles (~13 days)
+            "1D": 120,  # Last 120 days (~4 months)
+            "7D": 52,   # Last 52 weeks (~1 year)
+            "30D": 36,  # Last 36 months (~3 years)
+            "180D": 20, # Last 20 quarters (~5 years)
+            "1Y": 8     # All yearly candles
+        }
         self.pattern_window = self.pattern_windows.get(timeframe.upper(), 120)
+        
+        # MIN_PIVOT_DISTANCE adapts to TF
+        self.min_pivot_distances = {
+            "4H": 10,
+            "1D": 10,
+            "7D": 4,    # 4 weeks apart minimum
+            "30D": 2,   # 2 months apart minimum
+            "180D": 2,  # 2 quarters apart minimum
+            "1Y": 1     # 1 year apart minimum
+        }
+        self.MIN_PIVOT_DISTANCE = self.min_pivot_distances.get(timeframe.upper(), 10)
         
         self._recent_candles: List[Dict] = []
         self._pattern_start_index: int = 0

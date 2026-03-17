@@ -1,11 +1,19 @@
 """
-TA Setup API — Minimal Working Pipeline
+TA Setup API — With Timeframe Isolation
 ========================================
 
-Returns clean, structured setup data for Research page.
-NO trading terminal semantics. Pure technical analysis.
+CRITICAL FIX: Each timeframe = separate dataset with aggregated candles.
 
-Now uses PatternValidatorV2 for STRICT validation.
+NOT: 1D candles sliced for 7D view
+BUT: 1D candles aggregated into weekly/monthly candles
+
+Pipeline:
+1. Fetch raw daily candles
+2. Aggregate by timeframe (weekly, monthly, etc.)
+3. Pivot detection on AGGREGATED data
+4. Pattern detection on AGGREGATED data
+
+This ensures each TF shows DIFFERENT patterns based on that TF's structure.
 """
 
 from fastapi import APIRouter, Query
@@ -19,14 +27,259 @@ router = APIRouter(prefix="/api/ta", tags=["TA Setup"])
 from modules.ta_engine.setup.pattern_validator_v2 import get_pattern_validator_v2
 
 
+# =============================================================================
+# TIMEFRAME ISOLATION: Candle Aggregation
+# =============================================================================
+
+def aggregate_candles_weekly(daily_candles: List[Dict]) -> List[Dict]:
+    """
+    Aggregate daily candles into weekly candles.
+    
+    Each week: Monday-Sunday
+    - time = start of week (Monday)
+    - open = first day's open
+    - close = last day's close
+    - high = max of all days
+    - low = min of all days
+    - volume = sum of all days
+    """
+    if not daily_candles:
+        return []
+    
+    # Sort by time
+    sorted_candles = sorted(daily_candles, key=lambda x: x['time'])
+    
+    weekly = []
+    current_week = []
+    current_week_start = None
+    
+    for candle in sorted_candles:
+        # Get week start (Monday) for this candle
+        dt = datetime.utcfromtimestamp(candle['time'])
+        week_start = dt - timedelta(days=dt.weekday())
+        week_start_ts = int(week_start.replace(hour=0, minute=0, second=0).timestamp())
+        
+        if current_week_start is None:
+            current_week_start = week_start_ts
+        
+        if week_start_ts != current_week_start:
+            # New week - aggregate previous week
+            if current_week:
+                weekly.append({
+                    "time": current_week_start,
+                    "open": current_week[0]['open'],
+                    "high": max(c['high'] for c in current_week),
+                    "low": min(c['low'] for c in current_week),
+                    "close": current_week[-1]['close'],
+                    "volume": sum(c.get('volume', 0) for c in current_week)
+                })
+            current_week = [candle]
+            current_week_start = week_start_ts
+        else:
+            current_week.append(candle)
+    
+    # Don't forget last week
+    if current_week:
+        weekly.append({
+            "time": current_week_start,
+            "open": current_week[0]['open'],
+            "high": max(c['high'] for c in current_week),
+            "low": min(c['low'] for c in current_week),
+            "close": current_week[-1]['close'],
+            "volume": sum(c.get('volume', 0) for c in current_week)
+        })
+    
+    return weekly
+
+
+def aggregate_candles_monthly(daily_candles: List[Dict]) -> List[Dict]:
+    """
+    Aggregate daily candles into monthly candles.
+    
+    Each month:
+    - time = start of month
+    - open = first day's open
+    - close = last day's close
+    - high = max of all days
+    - low = min of all days
+    """
+    if not daily_candles:
+        return []
+    
+    sorted_candles = sorted(daily_candles, key=lambda x: x['time'])
+    
+    monthly = []
+    current_month = []
+    current_month_start = None
+    
+    for candle in sorted_candles:
+        dt = datetime.utcfromtimestamp(candle['time'])
+        month_start = dt.replace(day=1, hour=0, minute=0, second=0)
+        month_start_ts = int(month_start.timestamp())
+        
+        if current_month_start is None:
+            current_month_start = month_start_ts
+        
+        if month_start_ts != current_month_start:
+            # New month
+            if current_month:
+                monthly.append({
+                    "time": current_month_start,
+                    "open": current_month[0]['open'],
+                    "high": max(c['high'] for c in current_month),
+                    "low": min(c['low'] for c in current_month),
+                    "close": current_month[-1]['close'],
+                    "volume": sum(c.get('volume', 0) for c in current_month)
+                })
+            current_month = [candle]
+            current_month_start = month_start_ts
+        else:
+            current_month.append(candle)
+    
+    # Don't forget last month
+    if current_month:
+        monthly.append({
+            "time": current_month_start,
+            "open": current_month[0]['open'],
+            "high": max(c['high'] for c in current_month),
+            "low": min(c['low'] for c in current_month),
+            "close": current_month[-1]['close'],
+            "volume": sum(c.get('volume', 0) for c in current_month)
+        })
+    
+    return monthly
+
+
+def aggregate_candles_quarterly(daily_candles: List[Dict]) -> List[Dict]:
+    """Aggregate daily candles into quarterly (3-month) candles."""
+    if not daily_candles:
+        return []
+    
+    sorted_candles = sorted(daily_candles, key=lambda x: x['time'])
+    
+    quarterly = []
+    current_quarter = []
+    current_quarter_start = None
+    
+    for candle in sorted_candles:
+        dt = datetime.utcfromtimestamp(candle['time'])
+        # Quarter: Q1 = Jan-Mar, Q2 = Apr-Jun, etc.
+        quarter_month = ((dt.month - 1) // 3) * 3 + 1
+        quarter_start = dt.replace(month=quarter_month, day=1, hour=0, minute=0, second=0)
+        quarter_start_ts = int(quarter_start.timestamp())
+        
+        if current_quarter_start is None:
+            current_quarter_start = quarter_start_ts
+        
+        if quarter_start_ts != current_quarter_start:
+            if current_quarter:
+                quarterly.append({
+                    "time": current_quarter_start,
+                    "open": current_quarter[0]['open'],
+                    "high": max(c['high'] for c in current_quarter),
+                    "low": min(c['low'] for c in current_quarter),
+                    "close": current_quarter[-1]['close'],
+                    "volume": sum(c.get('volume', 0) for c in current_quarter)
+                })
+            current_quarter = [candle]
+            current_quarter_start = quarter_start_ts
+        else:
+            current_quarter.append(candle)
+    
+    if current_quarter:
+        quarterly.append({
+            "time": current_quarter_start,
+            "open": current_quarter[0]['open'],
+            "high": max(c['high'] for c in current_quarter),
+            "low": min(c['low'] for c in current_quarter),
+            "close": current_quarter[-1]['close'],
+            "volume": sum(c.get('volume', 0) for c in current_quarter)
+        })
+    
+    return quarterly
+
+
+def aggregate_candles_yearly(daily_candles: List[Dict]) -> List[Dict]:
+    """Aggregate daily candles into yearly candles."""
+    if not daily_candles:
+        return []
+    
+    sorted_candles = sorted(daily_candles, key=lambda x: x['time'])
+    
+    yearly = []
+    current_year = []
+    current_year_start = None
+    
+    for candle in sorted_candles:
+        dt = datetime.utcfromtimestamp(candle['time'])
+        year_start = dt.replace(month=1, day=1, hour=0, minute=0, second=0)
+        year_start_ts = int(year_start.timestamp())
+        
+        if current_year_start is None:
+            current_year_start = year_start_ts
+        
+        if year_start_ts != current_year_start:
+            if current_year:
+                yearly.append({
+                    "time": current_year_start,
+                    "open": current_year[0]['open'],
+                    "high": max(c['high'] for c in current_year),
+                    "low": min(c['low'] for c in current_year),
+                    "close": current_year[-1]['close'],
+                    "volume": sum(c.get('volume', 0) for c in current_year)
+                })
+            current_year = [candle]
+            current_year_start = year_start_ts
+        else:
+            current_year.append(candle)
+    
+    if current_year:
+        yearly.append({
+            "time": current_year_start,
+            "open": current_year[0]['open'],
+            "high": max(c['high'] for c in current_year),
+            "low": min(c['low'] for c in current_year),
+            "close": current_year[-1]['close'],
+            "volume": sum(c.get('volume', 0) for c in current_year)
+        })
+    
+    return yearly
+
+
+def aggregate_candles_by_tf(daily_candles: List[Dict], tf: str) -> List[Dict]:
+    """
+    Main aggregation function.
+    
+    4H  → keep daily (no aggregation needed, coinbase gives 4h)
+    1D  → keep daily
+    7D  → aggregate to weekly
+    30D → aggregate to monthly
+    180D → aggregate to quarterly
+    1Y  → aggregate to yearly
+    """
+    if tf in ["4H", "1D"]:
+        return daily_candles
+    elif tf == "7D":
+        return aggregate_candles_weekly(daily_candles)
+    elif tf == "30D":
+        return aggregate_candles_monthly(daily_candles)
+    elif tf == "180D":
+        return aggregate_candles_quarterly(daily_candles)
+    elif tf == "1Y":
+        return aggregate_candles_yearly(daily_candles)
+    else:
+        return daily_candles
+
+
+# =============================================================================
+# Pattern Detection
+# =============================================================================
+
 def detect_pattern(candles: List[Dict], symbol: str, tf: str) -> Dict:
     """
     Detect strongest VALID pattern from candles.
-    Uses strict per-pattern validators.
     
-    Returns: { type, confidence, points } or None if no valid pattern.
-    
-    RULE: Better to return nothing than garbage.
+    IMPORTANT: Candles should already be aggregated for the TF.
     """
     if len(candles) < 30:
         return None
@@ -38,170 +291,160 @@ def detect_pattern(candles: List[Dict], symbol: str, tf: str) -> Dict:
     pattern = validator.detect_best_pattern(candles)
     
     if pattern is None:
-        # No valid pattern found — this is correct behavior
         return None
     
     return pattern
 
 
+# =============================================================================
+# Level Detection
+# =============================================================================
+
 def detect_levels(candles: List[Dict]) -> List[Dict]:
-    """
-    Detect support/resistance levels.
-    Returns top 3 strongest levels.
-    """
-    if len(candles) < 10:
+    """Detect support/resistance levels. Returns top 3 strongest."""
+    if len(candles) < 20:
         return []
     
-    recent = candles[-100:] if len(candles) >= 100 else candles
-    highs = [c['high'] for c in recent]
-    lows = [c['low'] for c in recent]
-    closes = [c['close'] for c in recent]
+    price_clusters = {}
     
-    current = closes[-1]
+    for c in candles[-100:]:
+        for price in [c['high'], c['low']]:
+            bucket = round(price / 100) * 100
+            price_clusters[bucket] = price_clusters.get(bucket, 0) + 1
     
-    # Find pivot points
+    sorted_levels = sorted(price_clusters.items(), key=lambda x: x[1], reverse=True)
+    
+    current_price = candles[-1]['close']
+    
     levels = []
-    
-    # Highest high as resistance
-    max_high = max(highs)
-    levels.append({
-        "type": "resistance",
-        "price": round(max_high, 2),
-        "strength": round(0.7 + random.uniform(0, 0.2), 2)
-    })
-    
-    # Lowest low as support
-    min_low = min(lows)
-    levels.append({
-        "type": "support", 
-        "price": round(min_low, 2),
-        "strength": round(0.7 + random.uniform(0, 0.2), 2)
-    })
-    
-    # Mid level
-    mid = (max_high + min_low) / 2
-    levels.append({
-        "type": "support" if current > mid else "resistance",
-        "price": round(mid, 2),
-        "strength": round(0.5 + random.uniform(0, 0.2), 2)
-    })
-    
-    # Sort by strength
-    levels.sort(key=lambda x: x['strength'], reverse=True)
+    for price, touches in sorted_levels[:5]:
+        if price > current_price * 1.001:
+            level_type = "resistance"
+        elif price < current_price * 0.999:
+            level_type = "support"
+        else:
+            level_type = "pivot"
+        
+        strength = min(100, int(touches / len(candles[-100:]) * 400))
+        
+        levels.append({
+            "price": round(price, 2),
+            "type": level_type,
+            "strength": strength,
+            "touches": touches
+        })
     
     return levels[:3]
 
 
+# =============================================================================
+# Structure Analysis
+# =============================================================================
+
 def analyze_structure(candles: List[Dict]) -> Dict:
-    """
-    Analyze market structure (HH/HL/LH/LL).
-    """
-    if len(candles) < 20:
+    """Analyze market structure: HH, HL, LH, LL counts."""
+    if len(candles) < 10:
         return {"trend": "neutral", "hh": 0, "hl": 0, "lh": 0, "ll": 0}
     
-    recent = candles[-50:] if len(candles) >= 50 else candles
+    recent = candles[-50:]
     
-    # Count structure
-    hh, hl, lh, ll = 0, 0, 0, 0
+    hh_count = 0
+    hl_count = 0
+    lh_count = 0
+    ll_count = 0
     
-    for i in range(2, len(recent)):
-        prev_high = recent[i-1]['high']
-        prev_low = recent[i-1]['low']
-        curr_high = recent[i]['high']
-        curr_low = recent[i]['low']
-        prev2_high = recent[i-2]['high']
-        prev2_low = recent[i-2]['low']
+    prev_high = recent[0]['high']
+    prev_low = recent[0]['low']
+    
+    for c in recent[1:]:
+        if c['high'] > prev_high:
+            hh_count += 1
+        else:
+            lh_count += 1
         
-        # Higher high
-        if curr_high > prev_high and prev_high > prev2_high:
-            hh += 1
-        # Higher low
-        if curr_low > prev_low and prev_low > prev2_low:
-            hl += 1
-        # Lower high
-        if curr_high < prev_high and prev_high < prev2_high:
-            lh += 1
-        # Lower low
-        if curr_low < prev_low and prev_low < prev2_low:
-            ll += 1
+        if c['low'] > prev_low:
+            hl_count += 1
+        else:
+            ll_count += 1
+        
+        prev_high = c['high']
+        prev_low = c['low']
     
     # Determine trend
-    if hh + hl > lh + ll + 2:
+    if hh_count > lh_count and hl_count > ll_count:
         trend = "bullish"
-    elif lh + ll > hh + hl + 2:
+    elif lh_count > hh_count and ll_count > hl_count:
         trend = "bearish"
     else:
-        trend = "ranging"
+        trend = "neutral"
     
     return {
         "trend": trend,
-        "hh": hh,
-        "hl": hl,
-        "lh": lh,
-        "ll": ll
+        "hh": hh_count,
+        "hl": hl_count,
+        "lh": lh_count,
+        "ll": ll_count
     }
 
 
+# =============================================================================
+# Setup Builder
+# =============================================================================
+
 def build_setup(candles: List[Dict], pattern: Dict, levels: List[Dict], structure: Dict) -> Dict:
-    """
-    Build final setup based on pattern, levels, structure.
-    """
-    if not candles or not pattern or not levels:
+    """Build trading setup from analysis components."""
+    if not candles or not pattern:
         return None
     
-    current = candles[-1]['close']
+    current_price = candles[-1]['close']
     
-    # Find support and resistance
-    support = None
-    resistance = None
-    for level in levels:
-        if level['type'] == 'support' and (support is None or level['price'] < support):
-            support = level['price']
-        if level['type'] == 'resistance' and (resistance is None or level['price'] > resistance):
-            resistance = level['price']
+    # Determine direction from pattern
+    direction = pattern.get("direction", "neutral")
+    if direction == "neutral":
+        direction = structure.get("trend", "neutral")
     
-    if not support or not resistance:
-        support = support or current * 0.95
-        resistance = resistance or current * 1.05
-    
-    range_height = resistance - support
-    
-    # Determine direction
-    if structure['trend'] == 'bullish' or pattern['type'] in ['ascending_channel', 'ascending_triangle']:
-        direction = "bullish"
-        trigger = resistance
-        invalidation = support
-        targets = [
-            round(trigger + range_height * 0.5, 2),
-            round(trigger + range_height * 1.0, 2)
-        ]
-    elif structure['trend'] == 'bearish' or pattern['type'] in ['descending_channel', 'descending_triangle']:
-        direction = "bearish"
-        trigger = support
-        invalidation = resistance
-        targets = [
-            round(trigger - range_height * 0.5, 2),
-            round(trigger - range_height * 1.0, 2)
-        ]
+    # Calculate targets
+    if direction == "bearish":
+        support_levels = [l for l in levels if l['type'] == 'support']
+        if support_levels:
+            target1 = support_levels[0]['price']
+            target2 = target1 * 0.95
+        else:
+            target1 = current_price * 0.95
+            target2 = current_price * 0.90
+        
+        trigger = pattern.get("breakout_level") or current_price * 0.98
+        invalidation = pattern.get("invalidation") or current_price * 1.05
     else:
-        direction = "neutral"
-        trigger = current
-        invalidation = support if current > (support + resistance) / 2 else resistance
-        targets = [round(resistance, 2), round(support, 2)]
+        resistance_levels = [l for l in levels if l['type'] == 'resistance']
+        if resistance_levels:
+            target1 = resistance_levels[0]['price']
+            target2 = target1 * 1.05
+        else:
+            target1 = current_price * 1.05
+            target2 = current_price * 1.10
+        
+        trigger = pattern.get("breakout_level") or current_price * 1.02
+        invalidation = pattern.get("invalidation") or current_price * 0.95
     
-    # Calculate confidence
-    base_confidence = pattern['confidence']
-    structure_bonus = 0.1 if structure['trend'] == direction else -0.1
-    confidence = min(0.95, max(0.3, base_confidence + structure_bonus))
+    targets = [
+        {"price": round(target1, 2), "label": "T1"},
+        {"price": round(target2, 2), "label": "T2"}
+    ]
     
     return {
         "direction": direction,
-        "confidence": round(confidence, 2),
         "trigger": round(trigger, 2),
         "invalidation": round(invalidation, 2),
         "targets": targets
     }
 
+
+# =============================================================================
+# Main API Endpoint
+# =============================================================================
+
+from datetime import timedelta
 
 @router.get("/setup")
 async def get_ta_setup(
@@ -211,12 +454,12 @@ async def get_ta_setup(
     """
     Get complete TA setup for symbol and timeframe.
     
-    Returns:
-    - candles
-    - pattern (strongest)
-    - levels (top 3)
-    - structure
-    - setup (direction, trigger, invalidation, targets)
+    TIMEFRAME ISOLATION:
+    - Each TF uses AGGREGATED candles (not sliced daily)
+    - 7D = weekly candles
+    - 30D = monthly candles
+    - 180D = quarterly candles
+    - 1Y = yearly candles
     """
     # Normalize symbol
     clean_symbol = symbol.replace("USDT", "").replace("-USD", "").upper()
@@ -224,38 +467,28 @@ async def get_ta_setup(
     # Map timeframe
     tf_map = {
         "4H": "4H", "4h": "4H",
-        "1D": "1D", "1d": "1D", "7D": "7D", "7d": "7D",
+        "1D": "1D", "1d": "1D", 
+        "7D": "7D", "7d": "7D",
         "30D": "30D", "30d": "30D",
         "180D": "180D", "180d": "180D",
         "1Y": "1Y", "1y": "1Y"
     }
     normalized_tf = tf_map.get(tf, "1D")
     
-    # Fetch candles from existing endpoint
+    # Fetch raw candles
     try:
         from modules.data.coinbase_provider import coinbase_provider
         
-        # Convert TF to coinbase format and determine limit
-        coinbase_tf_map = {
-            "4H": "4h", "1D": "1d", "7D": "1d", "30D": "1d", "180D": "1d", "1Y": "1d"
-        }
-        cb_tf = coinbase_tf_map.get(normalized_tf, "1d")
+        # Always fetch daily candles (we'll aggregate them)
+        # Exception: 4H fetches 4h candles
+        if normalized_tf == "4H":
+            cb_tf = "4h"
+            limit = 1000  # ~166 days of 4h
+        else:
+            cb_tf = "1d"
+            limit = 2500  # ~7 years of daily
         
-        # Calculate limit based on timeframe - load full history
-        # BTC started trading on Coinbase around 2015
-        # Daily candles: ~3650 days (10 years)
-        limit_map = {
-            "4H": 1000,      # ~166 days
-            "1D": 2500,      # ~7 years of daily data
-            "7D": 2500,      # Full history
-            "30D": 2500,     # Full history
-            "180D": 2500,    # Full history
-            "1Y": 2500       # Full history
-        }
-        
-        # Fetch candles
         product_id = f"{clean_symbol}-USD"
-        limit = limit_map.get(normalized_tf, 2500)
         
         raw_candles = await coinbase_provider.get_candles(
             product_id=product_id,
@@ -264,9 +497,9 @@ async def get_ta_setup(
         )
         
         # Format candles
-        candles = []
+        daily_candles = []
         for c in raw_candles:
-            candles.append({
+            daily_candles.append({
                 "time": c['timestamp'] // 1000 if c['timestamp'] > 1e12 else c['timestamp'],
                 "open": c['open'],
                 "high": c['high'],
@@ -276,16 +509,16 @@ async def get_ta_setup(
             })
         
         # Sort by time
-        candles.sort(key=lambda x: x['time'])
+        daily_candles.sort(key=lambda x: x['time'])
         
     except Exception as e:
         # Fallback: generate mock data
         import time
-        base_time = int(time.time()) - 86400 * 200
+        base_time = int(time.time()) - 86400 * 2500
         base_price = 95000 if clean_symbol == "BTC" else 3200 if clean_symbol == "ETH" else 150
         
-        candles = []
-        for i in range(200):
+        daily_candles = []
+        for i in range(2500):
             t = base_time + i * 86400
             change = random.uniform(-0.03, 0.03)
             open_p = base_price * (1 + change)
@@ -294,7 +527,7 @@ async def get_ta_setup(
             low_p = min(open_p, close_p) * (1 - random.uniform(0, 0.015))
             base_price = close_p
             
-            candles.append({
+            daily_candles.append({
                 "time": t,
                 "open": round(open_p, 2),
                 "high": round(high_p, 2),
@@ -303,13 +536,18 @@ async def get_ta_setup(
                 "volume": random.randint(1000, 10000)
             })
     
-    # Detect pattern
+    # =================================================================
+    # CRITICAL: Aggregate candles by timeframe
+    # =================================================================
+    candles = aggregate_candles_by_tf(daily_candles, normalized_tf)
+    
+    # Detect pattern on AGGREGATED candles
     pattern = detect_pattern(candles, clean_symbol, normalized_tf)
     
-    # Detect levels
+    # Detect levels on AGGREGATED candles
     levels = detect_levels(candles)
     
-    # Analyze structure
+    # Analyze structure on AGGREGATED candles
     structure = analyze_structure(candles)
     
     # Build setup
@@ -319,6 +557,8 @@ async def get_ta_setup(
         "symbol": f"{clean_symbol}USDT",
         "timeframe": normalized_tf,
         "candles": candles,
+        "candle_count": len(candles),
+        "raw_daily_count": len(daily_candles),
         "pattern": pattern,
         "levels": levels,
         "structure": structure,
@@ -327,24 +567,65 @@ async def get_ta_setup(
     }
 
 
+# =============================================================================
+# Debug Endpoint
+# =============================================================================
+
 @router.get("/debug")
-async def debug_ta_setup(
+async def get_ta_debug(
     symbol: str = Query("BTCUSDT"),
     tf: str = Query("1D")
 ):
-    """Debug endpoint - returns setup summary only"""
-    data = await get_ta_setup(symbol, tf)
+    """Debug endpoint showing internal state."""
+    clean_symbol = symbol.replace("USDT", "").replace("-USD", "").upper()
+    
+    tf_map = {
+        "4H": "4H", "4h": "4H",
+        "1D": "1D", "1d": "1D",
+        "7D": "7D", "7d": "7D",
+        "30D": "30D", "30d": "30D"
+    }
+    normalized_tf = tf_map.get(tf, "1D")
+    
+    try:
+        from modules.data.coinbase_provider import coinbase_provider
+        
+        product_id = f"{clean_symbol}-USD"
+        raw_candles = await coinbase_provider.get_candles(
+            product_id=product_id,
+            timeframe="1d",
+            limit=500
+        )
+        
+        daily_candles = [{
+            "time": c['timestamp'] // 1000 if c['timestamp'] > 1e12 else c['timestamp'],
+            "open": c['open'],
+            "high": c['high'],
+            "low": c['low'],
+            "close": c['close'],
+        } for c in raw_candles]
+        
+        daily_candles.sort(key=lambda x: x['time'])
+        
+    except:
+        daily_candles = []
+    
+    # Aggregate
+    candles = aggregate_candles_by_tf(daily_candles, normalized_tf)
+    
+    # Get validator
+    validator = get_pattern_validator_v2(normalized_tf)
+    pivot_highs, pivot_lows = validator.find_pivots(candles)
     
     return {
-        "symbol": data["symbol"],
-        "timeframe": data["timeframe"],
-        "candles_count": len(data["candles"]),
-        "pattern": data["pattern"]["type"] if data["pattern"] else None,
-        "pattern_confidence": data["pattern"]["confidence"] if data["pattern"] else None,
-        "levels_count": len(data["levels"]),
-        "structure_trend": data["structure"]["trend"],
-        "setup_direction": data["setup"]["direction"] if data["setup"] else None,
-        "setup_trigger": data["setup"]["trigger"] if data["setup"] else None,
-        "setup_invalidation": data["setup"]["invalidation"] if data["setup"] else None,
-        "setup_targets": data["setup"]["targets"] if data["setup"] else None
+        "symbol": clean_symbol,
+        "timeframe": normalized_tf,
+        "raw_daily_count": len(daily_candles),
+        "aggregated_count": len(candles),
+        "pivot_highs": len(pivot_highs),
+        "pivot_lows": len(pivot_lows),
+        "first_candle": candles[0] if candles else None,
+        "last_candle": candles[-1] if candles else None,
+        "pattern_window": validator.pattern_window,
+        "pivot_window": validator.pivot_window,
     }

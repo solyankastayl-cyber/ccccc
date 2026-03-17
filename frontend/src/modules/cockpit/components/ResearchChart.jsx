@@ -343,7 +343,7 @@ const ResearchChart = ({
         </PatternLabel>
       )}
       
-      {setup && (
+      {showPattern && setup && (
         <BiasOverlay $direction={direction}>
           <span className="arrow">
             {direction === 'bullish' ? '↑' : direction === 'bearish' ? '↓' : '→'}

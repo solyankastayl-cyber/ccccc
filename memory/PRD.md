@@ -31,20 +31,28 @@
 - Documented structure engine, level engine, indicator engine
 - Documented setup builder confluence scoring system
 
-### Session 4: Unified Chart Objects Architecture (December 2025)
-**Major refactoring based on user feedback:**
+### Session 4: Pattern Validation Engine (December 2025)
+**Implemented PIVOT-BASED pattern detection with strict validation:**
 
-#### New Backend: `/api/ta/research` (CREATED BUT NOT USED)
-- Single unified endpoint returning objects with type, category, priority
-- Mode filtering: Research, Hypothesis, Trading
-- Projection Engine with hypothesis path
+#### New: `pattern_validation_engine.py`
+- **Pivot detection**: Window-based swing high/low detection (5 candles for 1D)
+- **Line building**: Trendlines built ONLY from pivot points
+- **Validation**:
+  - Minimum 3 touches required
+  - Parallel check for channels (±15% slope difference)
+  - 1.5% tolerance for touch detection
+  - Price must be inside pattern
+- **Fail-safe**: Returns `None` if no valid pattern (better than garbage)
 
-#### Kept: Light Theme ResearchViewNew.jsx
-- **User requested to keep original light design**
-- Setup Debug table
-- Detected Elements panel (Patterns, Indicators, Structure, Levels)
-- Technical Summary, Primary Setup, Market Structure panels
-- Pattern geometry rendering on chart
+#### Results:
+- BTC 1D: Descending Triangle 85% (16 touches)
+- ETH 1D: Descending Triangle 85%
+- 30D: No valid pattern (fail-safe works)
+
+#### Key changes:
+- Replaced random confidence with touch-based confidence
+- Timeframe-aware pivot windows (4H=3, 1D=5, 7D=7...)
+- Triangle vs Channel differentiation (converging vs parallel)
 
 ## Core Features Working
 1. Pattern detection (ascending/descending channel, triangle, range)

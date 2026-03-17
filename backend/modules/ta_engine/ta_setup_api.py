@@ -4,6 +4,8 @@ TA Setup API — Minimal Working Pipeline
 
 Returns clean, structured setup data for Research page.
 NO trading terminal semantics. Pure technical analysis.
+
+Now uses PatternValidationEngine for PIVOT-BASED detection.
 """
 
 from fastapi import APIRouter, Query
@@ -13,98 +15,37 @@ import random
 
 router = APIRouter(prefix="/api/ta", tags=["TA Setup"])
 
+# Import pattern validation engine
+from modules.ta_engine.setup.pattern_validation_engine import get_pattern_validation_engine
+
 
 def detect_pattern(candles: List[Dict], symbol: str, tf: str) -> Dict:
     """
-    Detect strongest pattern from candles.
-    Returns: { type, confidence, points }
+    Detect strongest VALID pattern from candles.
+    Uses pivot-based validation.
+    
+    Returns: { type, confidence, points } or None if no valid pattern.
     """
     if len(candles) < 20:
         return None
     
-    # Use recent candles for pattern detection (last 100 or available)
-    window = min(100, len(candles))
-    recent = candles[-window:]
-    highs = [c['high'] for c in recent]
-    lows = [c['low'] for c in recent]
-    closes = [c['close'] for c in recent]
-    times = [c['time'] for c in recent]
+    # Get validation engine for this timeframe
+    engine = get_pattern_validation_engine(tf.upper())
     
-    max_high = max(highs)
-    min_low = min(lows)
-    current = closes[-1]
-    range_size = max_high - min_low
+    # Detect best valid pattern
+    pattern = engine.detect_best_pattern(candles)
     
-    # Simple pattern detection
-    # Check for channel/triangle/range using regression over window
-    n = len(highs)
-    half = n // 2
+    if pattern is None:
+        # FAIL-SAFE: No valid pattern found
+        # Return None — better to show nothing than garbage
+        return None
     
-    # Calculate slopes for first and second halves
-    upper_slope_1 = (highs[half] - highs[0]) / half if half > 0 else 0
-    upper_slope_2 = (highs[-1] - highs[half]) / half if half > 0 else 0
-    lower_slope_1 = (lows[half] - lows[0]) / half if half > 0 else 0
-    lower_slope_2 = (lows[-1] - lows[half]) / half if half > 0 else 0
-    
-    upper_slope = (upper_slope_1 + upper_slope_2) / 2
-    lower_slope = (lower_slope_1 + lower_slope_2) / 2
-    
-    pattern_type = "range"
-    confidence = 0.5
-    
-    # Ascending channel: both slopes positive
-    if upper_slope > 0 and lower_slope > 0:
-        pattern_type = "ascending_channel"
-        confidence = 0.65 + random.uniform(0, 0.2)
-    # Descending channel: both slopes negative
-    elif upper_slope < 0 and lower_slope < 0:
-        pattern_type = "descending_channel"
-        confidence = 0.65 + random.uniform(0, 0.2)
-    # Triangle: converging slopes
-    elif abs(upper_slope - lower_slope) < abs(upper_slope + lower_slope) / 2:
-        if upper_slope < 0 and lower_slope > 0:
-            pattern_type = "symmetrical_triangle"
-            confidence = 0.6 + random.uniform(0, 0.15)
-        elif upper_slope < 0:
-            pattern_type = "descending_triangle"
-            confidence = 0.6 + random.uniform(0, 0.15)
-        else:
-            pattern_type = "ascending_triangle"
-            confidence = 0.6 + random.uniform(0, 0.15)
-    # Range: flat slopes
-    else:
-        pattern_type = "range"
-        confidence = 0.55 + random.uniform(0, 0.15)
-    
-    # Build pattern points - use FULL window for visibility
-    start_idx = 0
-    end_idx = n - 1
-    
-    # Calculate trendline values using linear regression approach
-    # Upper line: from first high to last high with slope
-    upper_start = highs[start_idx]
-    upper_end = highs[start_idx] + upper_slope * (end_idx - start_idx)
-    
-    # Lower line: from first low to last low with slope
-    lower_start = lows[start_idx]
-    lower_end = lows[start_idx] + lower_slope * (end_idx - start_idx)
-    
-    upper_points = [
-        [times[start_idx], round(upper_start, 2)],
-        [times[end_idx], round(upper_end, 2)]
-    ]
-    lower_points = [
-        [times[start_idx], round(lower_start, 2)],
-        [times[end_idx], round(lower_end, 2)]
-    ]
-    
+    # Convert to API format
     return {
-        "type": pattern_type,
-        "confidence": round(confidence, 2),
-        "points": {
-            "upper": upper_points,
-            "lower": lower_points
-        }
+        "type": pattern["type"],
+        "confidence": pattern["confidence"],
+        "touches": pattern.get("touches", 0),
+        "points": pattern["points"]
     }
 
 

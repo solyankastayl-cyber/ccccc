@@ -196,6 +196,22 @@ const ResearchChart = ({
     if (showPattern && pattern?.points) {
       const { upper, lower } = pattern.points;
       
+      // Helper to parse point (handles both array [time, value] and object {time, value})
+      const parsePoint = (pt) => {
+        if (Array.isArray(pt)) {
+          return {
+            time: typeof pt[0] === 'number' ? pt[0] : parseInt(pt[0]),
+            value: typeof pt[1] === 'number' ? pt[1] : parseFloat(pt[1]),
+          };
+        } else if (pt && typeof pt === 'object') {
+          return {
+            time: typeof pt.time === 'number' ? pt.time : parseInt(pt.time),
+            value: typeof pt.value === 'number' ? pt.value : parseFloat(pt.value),
+          };
+        }
+        return null;
+      };
+      
       // Upper trendline
       if (upper && upper.length >= 2) {
         const upperSeries = chart.addSeries(LineSeries, {
@@ -207,10 +223,10 @@ const ResearchChart = ({
           crosshairMarkerVisible: false,
         });
         
-        const upperData = upper.map(pt => ({
-          time: typeof pt[0] === 'number' ? pt[0] : parseInt(pt[0]),
-          value: typeof pt[1] === 'number' ? pt[1] : parseFloat(pt[1]),
-        })).filter(d => d.time > 0 && d.value > 0).sort((a, b) => a.time - b.time);
+        const upperData = upper
+          .map(parsePoint)
+          .filter(d => d && d.time > 0 && d.value > 0)
+          .sort((a, b) => a.time - b.time);
         
         if (upperData.length >= 2) {
           // Extend line into future
@@ -235,10 +251,10 @@ const ResearchChart = ({
           crosshairMarkerVisible: false,
         });
         
-        const lowerData = lower.map(pt => ({
-          time: typeof pt[0] === 'number' ? pt[0] : parseInt(pt[0]),
-          value: typeof pt[1] === 'number' ? pt[1] : parseFloat(pt[1]),
-        })).filter(d => d.time > 0 && d.value > 0).sort((a, b) => a.time - b.time);
+        const lowerData = lower
+          .map(parsePoint)
+          .filter(d => d && d.time > 0 && d.value > 0)
+          .sort((a, b) => a.time - b.time);
         
         if (lowerData.length >= 2) {
           // Extend line into future

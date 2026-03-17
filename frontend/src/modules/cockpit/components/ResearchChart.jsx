@@ -1,10 +1,15 @@
 /**
- * ResearchChart — Clean Technical Analysis Chart
- * ===============================================
+ * ResearchChart — Technical Analysis Chart with Pattern Geometry
+ * ==============================================================
  * 
- * Single dashed lines via createPriceLine only (no duplicates)
- * Lines extend 1 YEAR into future
- * Current price line visible
+ * Renders:
+ * 1. Candles/Line price series
+ * 2. Pattern geometry (channel/triangle lines)
+ * 3. Support/Resistance levels
+ * 4. Setup targets/trigger/invalidation
+ * 
+ * Layer priority:
+ * - candles → pattern geometry → levels → targets
  */
 
 import React, { useEffect, useRef } from 'react';
@@ -76,6 +81,8 @@ const COLORS = {
   trigger: '#8b5cf6',
   invalidation: '#f59e0b',
   target: '#3b82f6',
+  patternUpper: '#3b82f6',
+  patternLower: '#3b82f6',
 };
 
 const ResearchChart = ({
@@ -83,10 +90,13 @@ const ResearchChart = ({
   pattern = null,
   levels = [],
   setup = null,
+  structure = null,
   chartType = 'candles',
   height = 400,
   showLevels = true,
   showPattern = true,
+  showStructure = false,
+  showTargets = true,
 }) => {
   const chartRef = useRef(null);
   const chartInstanceRef = useRef(null);
@@ -129,22 +139,22 @@ const ResearchChart = ({
         borderColor: '#e2e8f0',
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 80, // Space for 1 year future
+        rightOffset: 80,
       },
     });
 
     chartInstanceRef.current = chart;
 
-    // Add price series with current price line
+    // 1. Add price series (candles/line)
     let priceSeries;
     if (chartType === 'line') {
       priceSeries = chart.addSeries(LineSeries, {
         color: COLORS.bullish,
         lineWidth: 2,
         lastValueVisible: true,
-        priceLineVisible: true, // Current price line
+        priceLineVisible: true,
         priceLineWidth: 1,
-        priceLineStyle: 2, // Dashed
+        priceLineStyle: 2,
       });
     } else {
       priceSeries = chart.addSeries(CandlestickSeries, {
@@ -155,13 +165,13 @@ const ResearchChart = ({
         wickUpColor: COLORS.bullish,
         wickDownColor: COLORS.bearish,
         lastValueVisible: true,
-        priceLineVisible: true, // Current price line
+        priceLineVisible: true,
         priceLineWidth: 1,
-        priceLineStyle: 2, // Dashed
+        priceLineStyle: 2,
       });
     }
 
-    // Format candles
+    // Format and set candle data
     const seen = new Set();
     const mapped = candles
       .map(c => ({
@@ -182,62 +192,119 @@ const ResearchChart = ({
 
     priceSeries.setData(mapped);
 
-    // Get price range for overlap detection
-    const priceRange = Math.max(...mapped.map(c => c.high)) - Math.min(...mapped.map(c => c.low));
-    const threshold = priceRange * 0.03; // 3% threshold
+    // 2. RENDER PATTERN GEOMETRY (channel/triangle lines)
+    if (showPattern && pattern?.points) {
+      const { upper, lower } = pattern.points;
+      
+      // Upper trendline
+      if (upper && upper.length >= 2) {
+        const upperSeries = chart.addSeries(LineSeries, {
+          color: COLORS.patternUpper,
+          lineWidth: 2,
+          lineStyle: 0, // Solid line for pattern
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        
+        const upperData = upper.map(pt => ({
+          time: typeof pt[0] === 'number' ? pt[0] : parseInt(pt[0]),
+          value: typeof pt[1] === 'number' ? pt[1] : parseFloat(pt[1]),
+        })).filter(d => d.time > 0 && d.value > 0).sort((a, b) => a.time - b.time);
+        
+        if (upperData.length >= 2) {
+          // Extend line into future
+          const lastPoint = upperData[upperData.length - 1];
+          const slope = (upperData[1].value - upperData[0].value) / (upperData[1].time - upperData[0].time);
+          const futureTime = lastPoint.time + 30 * 86400; // +30 days
+          const futureValue = lastPoint.value + slope * (futureTime - lastPoint.time);
+          upperData.push({ time: futureTime, value: futureValue });
+          
+          upperSeries.setData(upperData);
+        }
+      }
+      
+      // Lower trendline
+      if (lower && lower.length >= 2) {
+        const lowerSeries = chart.addSeries(LineSeries, {
+          color: COLORS.patternLower,
+          lineWidth: 2,
+          lineStyle: 0, // Solid line for pattern
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        
+        const lowerData = lower.map(pt => ({
+          time: typeof pt[0] === 'number' ? pt[0] : parseInt(pt[0]),
+          value: typeof pt[1] === 'number' ? pt[1] : parseFloat(pt[1]),
+        })).filter(d => d.time > 0 && d.value > 0).sort((a, b) => a.time - b.time);
+        
+        if (lowerData.length >= 2) {
+          // Extend line into future
+          const lastPoint = lowerData[lowerData.length - 1];
+          const slope = (lowerData[1].value - lowerData[0].value) / (lowerData[1].time - lowerData[0].time);
+          const futureTime = lastPoint.time + 30 * 86400;
+          const futureValue = lastPoint.value + slope * (futureTime - lastPoint.time);
+          lowerData.push({ time: futureTime, value: futureValue });
+          
+          lowerSeries.setData(lowerData);
+        }
+      }
+    }
 
-    // Collect all lines to draw (single priceLine per level - no LineSeries)
-    const linesToDraw = [];
-    
-    // Setup lines (higher priority)
-    if (setup?.trigger) {
-      linesToDraw.push({ price: setup.trigger, color: COLORS.trigger, label: 'Trigger', priority: 1 });
-    }
-    if (setup?.invalidation) {
-      linesToDraw.push({ price: setup.invalidation, color: COLORS.invalidation, label: 'Invalidation', priority: 1 });
-    }
-    if (setup?.targets?.length > 0) {
-      linesToDraw.push({ price: setup.targets[0], color: COLORS.target, label: 'Target 1', priority: 2 });
-      if (setup.targets[1]) {
-        linesToDraw.push({ price: setup.targets[1], color: COLORS.target, label: 'Target 2', priority: 3 });
-      }
-    }
-    
-    // Level lines (lower priority)
+    // 3. RENDER LEVELS (support/resistance as thin dashed lines)
     if (showLevels && levels.length > 0) {
-      const supportLevel = levels.find(l => l.type === 'support');
-      const resistanceLevel = levels.find(l => l.type === 'resistance');
+      const priceRange = Math.max(...mapped.map(c => c.high)) - Math.min(...mapped.map(c => c.low));
+      const threshold = priceRange * 0.02;
+      const drawnPrices = [];
       
-      if (supportLevel) {
-        linesToDraw.push({ price: supportLevel.price, color: COLORS.support, label: 'Support', priority: 4 });
-      }
-      if (resistanceLevel) {
-        linesToDraw.push({ price: resistanceLevel.price, color: COLORS.resistance, label: 'Resistance', priority: 4 });
-      }
-    }
-    
-    // Sort by priority and filter overlaps
-    linesToDraw.sort((a, b) => a.priority - b.priority);
-    const drawnPrices = [];
-    
-    // Draw SINGLE priceLine per level (no duplicate LineSeries)
-    linesToDraw.forEach(line => {
-      // Check overlap
-      const tooClose = drawnPrices.some(p => Math.abs(p - line.price) < threshold);
-      if (tooClose) return;
-      
-      drawnPrices.push(line.price);
-      
-      // Single dashed priceLine - extends to infinity (1 year+)
-      priceSeries.createPriceLine({
-        price: line.price,
-        color: line.color,
-        lineWidth: 1,
-        lineStyle: 2, // Dashed - single line
-        axisLabelVisible: true,
-        title: line.label,
+      levels.forEach(level => {
+        const tooClose = drawnPrices.some(p => Math.abs(p - level.price) < threshold);
+        if (tooClose) return;
+        drawnPrices.push(level.price);
+        
+        const color = level.type === 'support' ? COLORS.support : COLORS.resistance;
+        
+        priceSeries.createPriceLine({
+          price: level.price,
+          color: color,
+          lineWidth: 1,
+          lineStyle: 2, // Dashed
+          axisLabelVisible: true,
+          title: `${level.type} ${Math.round((level.strength || 0) * 100)}%`,
+        });
       });
-    });
+    }
+
+    // 4. RENDER TARGETS (secondary, thin lines)
+    if (showTargets && setup) {
+      const targetLines = [];
+      
+      if (setup.trigger) {
+        targetLines.push({ price: setup.trigger, color: COLORS.trigger, label: 'Trigger' });
+      }
+      if (setup.invalidation) {
+        targetLines.push({ price: setup.invalidation, color: COLORS.invalidation, label: 'Invalidation' });
+      }
+      if (setup.targets?.[0]) {
+        targetLines.push({ price: setup.targets[0], color: COLORS.target, label: 'T1' });
+      }
+      if (setup.targets?.[1]) {
+        targetLines.push({ price: setup.targets[1], color: COLORS.target, label: 'T2' });
+      }
+      
+      targetLines.forEach(line => {
+        priceSeries.createPriceLine({
+          price: line.price,
+          color: line.color,
+          lineWidth: 1,
+          lineStyle: 1, // Dotted (less prominent than pattern)
+          axisLabelVisible: true,
+          title: line.label,
+        });
+      });
+    }
 
     // Fit content
     chart.timeScale().fitContent();
@@ -260,7 +327,7 @@ const ResearchChart = ({
         chartInstanceRef.current = null;
       }
     };
-  }, [candles, chartType, height, levels, setup, showLevels]);
+  }, [candles, chartType, height, levels, setup, pattern, showLevels, showPattern, showTargets]);
 
   const direction = setup?.direction || 'neutral';
   const confidence = setup?.confidence ? Math.round(setup.confidence * 100) : 0;

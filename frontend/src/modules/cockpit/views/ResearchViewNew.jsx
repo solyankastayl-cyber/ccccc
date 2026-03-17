@@ -580,22 +580,56 @@ const ResearchView = () => {
     }
   };
 
-  // Derived data
-  // Extract data from new API format
+  // Derived data - Map backend format to component format
+  // Backend returns: { pattern: {...}, levels: [...], structure: {...}, setup: {...} }
+  // Components expect normalized format
   const pattern = setupData?.pattern;
   const levels = setupData?.levels || [];
   const structure = setupData?.structure;
   const setup = setupData?.setup;
   
-  // Map to old format for components (temporary compatibility)
-  const topSetup = setupData ? {
+  // Map structure to array format for PatternActivationLayer
+  const structureArray = structure ? [
+    ...Array(structure.hh || 0).fill({ type: 'HH' }),
+    ...Array(structure.hl || 0).fill({ type: 'HL' }),
+    ...Array(structure.lh || 0).fill({ type: 'LH' }),
+    ...Array(structure.ll || 0).fill({ type: 'LL' }),
+  ] : [];
+  
+  // Build unified setup object for all components
+  const unifiedSetup = setupData ? {
+    // Pattern as array (for PatternActivationLayer)
+    patterns: pattern ? [{
+      type: pattern.type,
+      confidence: pattern.confidence,
+      direction: setup?.direction,
+      points: pattern.points,
+    }] : [],
+    
+    // Single pattern object (for ResearchChart)
     pattern: pattern,
+    
+    // Levels array
     levels: levels,
+    
+    // Structure as array
+    structure: structureArray,
+    
+    // Setup details
     direction: setup?.direction,
     confidence: setup?.confidence,
     trigger: setup?.trigger,
     invalidation: setup?.invalidation,
-    targets: setup?.targets,
+    targets: setup?.targets || [],
+    
+    // Empty arrays for missing data (to avoid "No X detected")
+    indicators: [],
+    conflicts: [],
+    
+    // Market context
+    market_regime: structure?.trend,
+    asset: symbol,
+    timeframe: timeframe,
   } : null;
   
   const technicalBias = setup?.direction || 'neutral';
@@ -769,10 +803,13 @@ const ResearchView = () => {
             pattern={pattern}
             levels={levels}
             setup={setup}
+            structure={structure}
             chartType={chartType}
             height={400}
             showLevels={layerVisibility.levels}
             showPattern={layerVisibility.patterns}
+            showStructure={layerVisibility.structure}
+            showTargets={layerVisibility.targets}
           />
           {loading && (
             <LoadingOverlay>
@@ -823,14 +860,14 @@ const ResearchView = () => {
 
         {/* Pattern Activation Layer */}
         <PatternActivationLayer
-          setup={topSetup}
+          setup={unifiedSetup}
           activeElements={activeElements}
           onToggleElement={handleToggleElement}
         />
 
         {/* Deep Analysis Blocks */}
         <DeepAnalysisBlocks
-          setup={topSetup}
+          setup={unifiedSetup}
           technicalBias={technicalBias}
           biasConfidence={biasConfidence}
         />

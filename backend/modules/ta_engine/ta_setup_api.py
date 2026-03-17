@@ -22,8 +22,9 @@ def detect_pattern(candles: List[Dict], symbol: str, tf: str) -> Dict:
     if len(candles) < 20:
         return None
     
-    # Get recent price action
-    recent = candles[-50:] if len(candles) >= 50 else candles
+    # Use recent candles for pattern detection (last 100 or available)
+    window = min(100, len(candles))
+    recent = candles[-window:]
     highs = [c['high'] for c in recent]
     lows = [c['low'] for c in recent]
     closes = [c['close'] for c in recent]
@@ -35,9 +36,18 @@ def detect_pattern(candles: List[Dict], symbol: str, tf: str) -> Dict:
     range_size = max_high - min_low
     
     # Simple pattern detection
-    # Check for channel/triangle/range
-    upper_slope = (highs[-1] - highs[-20]) / 20 if len(highs) >= 20 else 0
-    lower_slope = (lows[-1] - lows[-20]) / 20 if len(lows) >= 20 else 0
+    # Check for channel/triangle/range using regression over window
+    n = len(highs)
+    half = n // 2
+    
+    # Calculate slopes for first and second halves
+    upper_slope_1 = (highs[half] - highs[0]) / half if half > 0 else 0
+    upper_slope_2 = (highs[-1] - highs[half]) / half if half > 0 else 0
+    lower_slope_1 = (lows[half] - lows[0]) / half if half > 0 else 0
+    lower_slope_2 = (lows[-1] - lows[half]) / half if half > 0 else 0
+    
+    upper_slope = (upper_slope_1 + upper_slope_2) / 2
+    lower_slope = (lower_slope_1 + lower_slope_2) / 2
     
     pattern_type = "range"
     confidence = 0.5
@@ -66,18 +76,26 @@ def detect_pattern(candles: List[Dict], symbol: str, tf: str) -> Dict:
         pattern_type = "range"
         confidence = 0.55 + random.uniform(0, 0.15)
     
-    # Build pattern points
-    n = len(times)
-    start_idx = max(0, n - 30)
+    # Build pattern points - use FULL window for visibility
+    start_idx = 0
     end_idx = n - 1
     
+    # Calculate trendline values using linear regression approach
+    # Upper line: from first high to last high with slope
+    upper_start = highs[start_idx]
+    upper_end = highs[start_idx] + upper_slope * (end_idx - start_idx)
+    
+    # Lower line: from first low to last low with slope
+    lower_start = lows[start_idx]
+    lower_end = lows[start_idx] + lower_slope * (end_idx - start_idx)
+    
     upper_points = [
-        [times[start_idx], highs[start_idx]],
-        [times[end_idx], highs[end_idx]]
+        [times[start_idx], round(upper_start, 2)],
+        [times[end_idx], round(upper_end, 2)]
     ]
     lower_points = [
-        [times[start_idx], lows[start_idx]],
-        [times[end_idx], lows[end_idx]]
+        [times[start_idx], round(lower_start, 2)],
+        [times[end_idx], round(lower_end, 2)]
     ]
     
     return {

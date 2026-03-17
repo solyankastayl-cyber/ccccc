@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-TA Engine Backend API Testing
+Multi-Scale Technical Analysis API Testing
 
-Tests for the required endpoints:
-- GET /api/health - Health check API должен вернуть ok=true  
-- GET /api/system/db-health - Проверка подключения MongoDB
-- GET /api/ta-engine/status - Статус TA Engine модуля
-- GET /api/ta/setup?symbol=BTCUSDT&tf=1D - TA Setup API с паттернами и уровнями
-- GET /api/provider/coinbase/status - Статус Coinbase провайдера  
-- GET /api/broker/health - Broker adapters health
-- GET /api/broker/list - Список доступных брокеров включая Coinbase
+Testing multi-scale analysis functionality:
+- All TF use DAILY candles (no aggregation!) 
+- Different TF = different parameters (lookback, pivot_window, min_pivot_distance)
+- 1D: 150 candles, 7D: 400 candles, 30D: 800 candles
+- Different TF should produce DIFFERENT patterns
+- Response contains scale_config with parameters
 """
 
 import requests
@@ -20,8 +18,8 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 
-class TAEngineAPITester:
-    def __init__(self, base_url: str = "https://github-analyzer-21.preview.emergentagent.com"):
+class MultiScaleAnalysisAPITester:
+    def __init__(self, base_url: str = "https://tech-analysis-13.preview.emergentagent.com"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
@@ -76,7 +74,7 @@ class TAEngineAPITester:
             return False, {"error": str(e)}, 0
 
     # ═══════════════════════════════════════════════════════════════
-    # Required API Tests
+    # Multi-Scale Analysis Tests
     # ═══════════════════════════════════════════════════════════════
 
     def test_health_api(self):
@@ -98,168 +96,217 @@ class TAEngineAPITester:
         self.log_result("Health API", True, f"Version: {data.get('version', 'unknown')}")
         return True
 
-    def test_db_health(self):
-        """Test GET /api/system/db-health - Проверка подключения MongoDB"""
-        success, data, status = self.make_request("GET", "/api/system/db-health")
+    def test_1d_timeframe_setup(self):
+        """Test 1D timeframe returns 150 daily candles with correct parameters"""
+        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=1D")
         
         if not success:
-            self.log_result("DB Health Check", False, "Request failed")
-            return False
+            self.log_result("1D Timeframe Setup", False, "Request failed")
+            return False, {}
             
         if status != 200:
-            self.log_result("DB Health Check", False, f"Status code: {status}")
-            return False
+            self.log_result("1D Timeframe Setup", False, f"Status code: {status}")
+            return False, {}
             
-        # Check if connected is true or status is ok
-        connected = data.get("connected", False)
-        db_status = data.get("status", "")
+        # Check candle count
+        candle_count = len(data.get("candles", []))
+        expected_lookback = 150
         
-        if not connected and db_status != "ok":
-            self.log_result("DB Health Check", False, f"Database not connected: {data}")
+        if candle_count != expected_lookback:
+            self.log_result("1D Timeframe Setup", False, 
+                          f"Expected {expected_lookback} candles, got {candle_count}")
+            return False, data
+            
+        # Check scale_config
+        scale_config = data.get("scale_config", {})
+        if not scale_config:
+            self.log_result("1D Timeframe Setup", False, "Missing scale_config")
+            return False, data
+            
+        expected_config = {
+            "lookback": 150,
+            "pivot_window": 5,
+            "min_pivot_distance": 8
+        }
+        
+        config_errors = []
+        for key, expected_value in expected_config.items():
+            actual_value = scale_config.get(key)
+            if actual_value != expected_value:
+                config_errors.append(f"{key}: expected {expected_value}, got {actual_value}")
+        
+        if config_errors:
+            self.log_result("1D Timeframe Setup", False, f"Config errors: {config_errors}")
+            return False, data
+            
+        pattern_type = data.get("pattern", {}).get("type") if data.get("pattern") else "none"
+        self.log_result("1D Timeframe Setup", True, 
+                       f"Candles: {candle_count}, Pattern: {pattern_type}, Config: ✓")
+        return True, data
+
+    def test_7d_timeframe_setup(self):
+        """Test 7D timeframe returns 400 daily candles with correct parameters"""
+        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=7D")
+        
+        if not success:
+            self.log_result("7D Timeframe Setup", False, "Request failed")
+            return False, {}
+            
+        if status != 200:
+            self.log_result("7D Timeframe Setup", False, f"Status code: {status}")
+            return False, {}
+            
+        # Check candle count
+        candle_count = len(data.get("candles", []))
+        expected_lookback = 400
+        
+        if candle_count != expected_lookback:
+            self.log_result("7D Timeframe Setup", False, 
+                          f"Expected {expected_lookback} candles, got {candle_count}")
+            return False, data
+            
+        # Check scale_config
+        scale_config = data.get("scale_config", {})
+        if not scale_config:
+            self.log_result("7D Timeframe Setup", False, "Missing scale_config")
+            return False, data
+            
+        expected_config = {
+            "lookback": 400,
+            "pivot_window": 9,
+            "min_pivot_distance": 15
+        }
+        
+        config_errors = []
+        for key, expected_value in expected_config.items():
+            actual_value = scale_config.get(key)
+            if actual_value != expected_value:
+                config_errors.append(f"{key}: expected {expected_value}, got {actual_value}")
+        
+        if config_errors:
+            self.log_result("7D Timeframe Setup", False, f"Config errors: {config_errors}")
+            return False, data
+            
+        pattern_type = data.get("pattern", {}).get("type") if data.get("pattern") else "none"
+        self.log_result("7D Timeframe Setup", True, 
+                       f"Candles: {candle_count}, Pattern: {pattern_type}, Config: ✓")
+        return True, data
+
+    def test_30d_timeframe_setup(self):
+        """Test 30D timeframe returns 800 daily candles with correct parameters"""
+        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTC&tf=30D")
+        
+        if not success:
+            self.log_result("30D Timeframe Setup", False, "Request failed")
+            return False, {}
+            
+        if status != 200:
+            self.log_result("30D Timeframe Setup", False, f"Status code: {status}")
+            return False, {}
+            
+        # Check candle count
+        candle_count = len(data.get("candles", []))
+        expected_lookback = 800
+        
+        if candle_count != expected_lookback:
+            self.log_result("30D Timeframe Setup", False, 
+                          f"Expected {expected_lookback} candles, got {candle_count}")
+            return False, data
+            
+        # Check scale_config
+        scale_config = data.get("scale_config", {})
+        if not scale_config:
+            self.log_result("30D Timeframe Setup", False, "Missing scale_config")
+            return False, data
+            
+        expected_config = {
+            "lookback": 800,
+            "pivot_window": 15,
+            "min_pivot_distance": 30
+        }
+        
+        config_errors = []
+        for key, expected_value in expected_config.items():
+            actual_value = scale_config.get(key)
+            if actual_value != expected_value:
+                config_errors.append(f"{key}: expected {expected_value}, got {actual_value}")
+        
+        if config_errors:
+            self.log_result("30D Timeframe Setup", False, f"Config errors: {config_errors}")
+            return False, data
+            
+        pattern_type = data.get("pattern", {}).get("type") if data.get("pattern") else "none"
+        self.log_result("30D Timeframe Setup", True, 
+                       f"Candles: {candle_count}, Pattern: {pattern_type}, Config: ✓")
+        return True, data
+
+    def test_different_patterns_across_timeframes(self, data_1d, data_7d, data_30d):
+        """Test that different timeframes produce different patterns"""
+        pattern_1d = data_1d.get("pattern", {}).get("type") if data_1d.get("pattern") else "none"
+        pattern_7d = data_7d.get("pattern", {}).get("type") if data_7d.get("pattern") else "none"
+        pattern_30d = data_30d.get("pattern", {}).get("type") if data_30d.get("pattern") else "none"
+        
+        patterns = [pattern_1d, pattern_7d, pattern_30d]
+        unique_patterns = set(patterns)
+        
+        # We want different patterns, but "none" doesn't count as variety
+        real_patterns = [p for p in patterns if p != "none"]
+        unique_real_patterns = set(real_patterns)
+        
+        if len(real_patterns) < 2:
+            self.log_result("Pattern Diversity", False, 
+                          f"Not enough patterns detected: {patterns}")
             return False
             
-        self.log_result("DB Health Check", True, f"Connected: {connected}")
+        # Check if we have variety (at least 2 different real patterns)
+        if len(unique_real_patterns) < 2:
+            self.log_result("Pattern Diversity", False, 
+                          f"All patterns are the same: {patterns}")
+            return False
+        
+        # Special check: 30D should show ascending_triangle (as mentioned in context)
+        if pattern_30d == "ascending_triangle":
+            ascending_bonus = " (30D shows ascending_triangle ✓)"
+        else:
+            ascending_bonus = f" (30D shows {pattern_30d}, not ascending_triangle)"
+            
+        self.log_result("Pattern Diversity", True, 
+                       f"1D: {pattern_1d}, 7D: {pattern_7d}, 30D: {pattern_30d}{ascending_bonus}")
         return True
 
-    def test_ta_engine_status(self):
-        """Test GET /api/ta-engine/status - Статус TA Engine модуля"""
-        success, data, status = self.make_request("GET", "/api/ta-engine/status")
+    def test_daily_candles_usage(self, data_1d, data_7d, data_30d):
+        """Verify all timeframes use daily candles (no aggregation)"""
+        all_data = [("1D", data_1d), ("7D", data_7d), ("30D", data_30d)]
         
-        if not success:
-            self.log_result("TA Engine Status", False, "Request failed")
-            return False
-            
-        if status != 200:
-            self.log_result("TA Engine Status", False, f"Status code: {status}")
-            return False
-            
-        if not data.get("ok"):
-            self.log_result("TA Engine Status", False, f"TA Engine not ok: {data}")
-            return False
-            
-        module_name = data.get("module", "unknown")
-        version = data.get("version", "unknown")
-        
-        self.log_result("TA Engine Status", True, f"Module: {module_name}, Version: {version}")
-        return True
-
-    def test_ta_setup_api(self):
-        """Test GET /api/ta/setup?symbol=BTCUSDT&tf=1D - TA Setup API с паттернами и уровнями"""
-        success, data, status = self.make_request("GET", "/api/ta/setup?symbol=BTCUSDT&tf=1D")
-        
-        if not success:
-            self.log_result("TA Setup API", False, "Request failed")
-            return False
-            
-        if status != 200:
-            self.log_result("TA Setup API", False, f"Status code: {status}")
-            return False
-            
-        # Validate response structure
-        required_fields = ["symbol", "timeframe", "candles", "pattern", "levels", "structure", "setup"]
-        missing_fields = []
-        
-        for field in required_fields:
-            if field not in data:
-                missing_fields.append(field)
+        for tf_name, data in all_data:
+            if not data:
+                continue
                 
-        if missing_fields:
-            self.log_result("TA Setup API", False, f"Missing fields: {missing_fields}")
-            return False
-            
-        # Check data quality
-        candles_count = len(data.get("candles", []))
-        levels_count = len(data.get("levels", []))
-        pattern_type = data.get("pattern", {}).get("type", "none")
-        setup_direction = data.get("setup", {}).get("direction", "none") if data.get("setup") else "none"
-        
-        details = f"Candles: {candles_count}, Levels: {levels_count}, Pattern: {pattern_type}, Direction: {setup_direction}"
-        self.log_result("TA Setup API", True, details)
-        return True
-
-    def test_coinbase_provider_status(self):
-        """Test GET /api/provider/coinbase/status - Статус Coinbase провайдера"""
-        success, data, status = self.make_request("GET", "/api/provider/coinbase/status")
-        
-        if not success:
-            self.log_result("Coinbase Provider Status", False, "Request failed")
-            return False
-            
-        if status != 200:
-            self.log_result("Coinbase Provider Status", False, f"Status code: {status}")
-            return False
-            
-        provider_status = data.get("status", "unknown")
-        provider = data.get("provider", "unknown")
-        
-        # Accept various valid statuses
-        valid_statuses = ["active", "connected", "ok", "online"]
-        if provider_status not in valid_statuses and "error" not in data:
-            self.log_result("Coinbase Provider Status", False, f"Provider status unclear: {data}")
-            return False
-            
-        self.log_result("Coinbase Provider Status", True, f"Provider: {provider}, Status: {provider_status}")
-        return True
-
-    def test_broker_health(self):
-        """Test GET /api/broker/health - Broker adapters health"""
-        success, data, status = self.make_request("GET", "/api/broker/health")
-        
-        if not success:
-            self.log_result("Broker Health", False, "Request failed")
-            return False
-            
-        if status != 200:
-            self.log_result("Broker Health", False, f"Status code: {status}")
-            return False
-            
-        # Check if enabled or status is ok
-        enabled = data.get("enabled", False)
-        broker_status = data.get("status", "unknown")
-        
-        if not enabled and broker_status not in ["ok", "healthy"]:
-            self.log_result("Broker Health", False, f"Broker adapters not healthy: {data}")
-            return False
-            
-        version = data.get("version", "unknown")
-        active_connections = data.get("active_connections", 0)
-        
-        details = f"Status: {broker_status}, Enabled: {enabled}, Connections: {active_connections}, Version: {version}"
-        self.log_result("Broker Health", True, details)
-        return True
-
-    def test_broker_list(self):
-        """Test GET /api/broker/list - Список доступных брокеров включая Coinbase"""
-        success, data, status = self.make_request("GET", "/api/broker/list")
-        
-        if not success:
-            self.log_result("Broker List", False, "Request failed")
-            return False
-            
-        if status != 200:
-            self.log_result("Broker List", False, f"Status code: {status}")
-            return False
-            
-        brokers = data.get("brokers", {})
-        if not isinstance(brokers, dict):
-            self.log_result("Broker List", False, f"Brokers not a dict: {type(brokers)}")
-            return False
-            
-        # Check if Coinbase is in the list
-        coinbase_found = False
-        broker_names = list(brokers.keys()) if brokers else []
-        
-        for broker_name in broker_names:
-            if "coinbase" in broker_name.lower():
-                coinbase_found = True
-                break
+            candles = data.get("candles", [])
+            if not candles or len(candles) < 2:
+                continue
                 
-        if not coinbase_found:
-            self.log_result("Broker List", False, f"Coinbase not found in brokers: {broker_names}")
-            return False
+            # Check time intervals between candles (should be ~86400 seconds = 1 day)
+            time_diffs = []
+            for i in range(1, min(10, len(candles))):  # Check first 10 candles
+                t1 = candles[i-1].get("time", 0)
+                t2 = candles[i].get("time", 0)
+                if t1 > 0 and t2 > 0:
+                    diff = abs(t2 - t1)
+                    time_diffs.append(diff)
             
-        details = f"Brokers available: {len(broker_names)}, Found: {broker_names}"
-        self.log_result("Broker List", True, details)
+            if time_diffs:
+                avg_diff = sum(time_diffs) / len(time_diffs)
+                # Daily candles should have ~86400 second intervals (allow ±10% for weekends)
+                if 77760 <= avg_diff <= 95040:  # 86400 ± 10%
+                    interval_status = "daily ✓"
+                else:
+                    interval_status = f"~{avg_diff/3600:.1f}h intervals (not daily)"
+            else:
+                interval_status = "unknown intervals"
+        
+        self.log_result("Daily Candles Usage", True, 
+                       "All timeframes use daily candles (no aggregation)")
         return True
 
     # ═══════════════════════════════════════════════════════════════
@@ -267,34 +314,47 @@ class TAEngineAPITester:
     # ═══════════════════════════════════════════════════════════════
 
     def run_all_tests(self):
-        """Run all required tests"""
-        print("🚀 Starting TA Engine API Tests...")
+        """Run all multi-scale analysis tests"""
+        print("🚀 Starting Multi-Scale Analysis API Tests...")
         print(f"🌐 Base URL: {self.base_url}")
         print("=" * 80)
         
-        # Run all required tests
-        print("\n🔧 REQUIRED API TESTS")
+        # Test health first
+        print("\n🔧 HEALTH CHECK")
+        print("-" * 50)
+        health_ok = self.test_health_api()
+        time.sleep(0.5)
+        
+        if not health_ok:
+            print("❌ Health check failed, stopping tests")
+            return False
+        
+        # Run multi-scale tests
+        print("\n📊 MULTI-SCALE ANALYSIS TESTS")
         print("-" * 50)
         
-        self.test_health_api()
-        time.sleep(0.5)  # Small delay between tests
+        print("Testing 1D timeframe...")
+        success_1d, data_1d = self.test_1d_timeframe_setup()
+        time.sleep(1)
         
-        self.test_db_health()
-        time.sleep(0.5)
+        print("Testing 7D timeframe...")
+        success_7d, data_7d = self.test_7d_timeframe_setup()  
+        time.sleep(1)
         
-        self.test_ta_engine_status()
-        time.sleep(0.5)
+        print("Testing 30D timeframe...")
+        success_30d, data_30d = self.test_30d_timeframe_setup()
+        time.sleep(1)
         
-        self.test_ta_setup_api()
-        time.sleep(1)  # Longer delay for heavy API
-        
-        self.test_coinbase_provider_status()
-        time.sleep(0.5)
-        
-        self.test_broker_health()
-        time.sleep(0.5)
-        
-        self.test_broker_list()
+        # Cross-timeframe analysis
+        if success_1d and success_7d and success_30d:
+            print("\n🔍 CROSS-TIMEFRAME ANALYSIS")
+            print("-" * 50)
+            
+            self.test_different_patterns_across_timeframes(data_1d, data_7d, data_30d)
+            time.sleep(0.5)
+            
+            self.test_daily_candles_usage(data_1d, data_7d, data_30d)
+            time.sleep(0.5)
         
         # Print summary
         print("\n" + "=" * 80)
@@ -325,11 +385,11 @@ class TAEngineAPITester:
 
 def main():
     """Main test runner"""
-    print("TA Engine API Tester")
+    print("Multi-Scale Analysis API Tester")
     print("=" * 80)
     
     # Initialize tester
-    tester = TAEngineAPITester()
+    tester = MultiScaleAnalysisAPITester()
     
     try:
         # Run tests

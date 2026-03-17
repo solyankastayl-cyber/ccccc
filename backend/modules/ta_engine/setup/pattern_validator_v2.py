@@ -115,41 +115,36 @@ class PatternValidatorV2:
     # P0.5: Confidence threshold
     MIN_CONFIDENCE = 0.60  # не показываем паттерн если ниже
     
-    def __init__(self, timeframe: str = "1D"):
-        # Pivot window = how many candles on each side to confirm a pivot
-        # For higher TF with fewer candles, we need smaller windows
-        self.pivot_windows = {
-            "4H": 3,    # ~166 candles, need 3 on each side
-            "1D": 5,    # ~2500 candles, need 5 on each side
-            "7D": 3,    # ~350 candles (weekly), need 3 on each side
-            "30D": 2,   # ~80 candles (monthly), need 2 on each side
-            "180D": 2,  # ~28 candles (quarterly), need 2 on each side
-            "1Y": 1     # ~8 candles (yearly), need 1 on each side
-        }
-        self.pivot_window = self.pivot_windows.get(timeframe.upper(), 5)
+    def __init__(self, timeframe: str = "1D", config: Dict = None):
+        """
+        Initialize with TF-specific config from Multi-Scale Analysis.
         
-        # Pattern window = how many recent candles to analyze for patterns
-        # For higher TF, we use ALL available candles
-        self.pattern_windows = {
-            "4H": 80,   # Last 80 4H candles (~13 days)
-            "1D": 120,  # Last 120 days (~4 months)
-            "7D": 52,   # Last 52 weeks (~1 year)
-            "30D": 36,  # Last 36 months (~3 years)
-            "180D": 20, # Last 20 quarters (~5 years)
-            "1Y": 8     # All yearly candles
-        }
-        self.pattern_window = self.pattern_windows.get(timeframe.upper(), 120)
-        
-        # MIN_PIVOT_DISTANCE adapts to TF
-        self.min_pivot_distances = {
-            "4H": 10,
-            "1D": 10,
-            "7D": 4,    # 4 weeks apart minimum
-            "30D": 2,   # 2 months apart minimum
-            "180D": 2,  # 2 quarters apart minimum
-            "1Y": 1     # 1 year apart minimum
-        }
-        self.MIN_PIVOT_DISTANCE = self.min_pivot_distances.get(timeframe.upper(), 10)
+        Config can override:
+        - pivot_window
+        - pattern_window  
+        - min_pivot_distance
+        """
+        # Use external config if provided (Multi-Scale Analysis)
+        if config:
+            self.pivot_window = config.get("pivot_window", 5)
+            self.pattern_window = config.get("pattern_window", 120)
+            self.MIN_PIVOT_DISTANCE = config.get("min_pivot_distance", 10)
+        else:
+            # Legacy: internal defaults by TF
+            self.pivot_windows = {
+                "4H": 3, "1D": 5, "7D": 9, "30D": 15, "180D": 25, "1Y": 40
+            }
+            self.pivot_window = self.pivot_windows.get(timeframe.upper(), 5)
+            
+            self.pattern_windows = {
+                "4H": 80, "1D": 100, "7D": 250, "30D": 500, "180D": 800, "1Y": 1200
+            }
+            self.pattern_window = self.pattern_windows.get(timeframe.upper(), 120)
+            
+            self.min_pivot_distances = {
+                "4H": 5, "1D": 8, "7D": 15, "30D": 30, "180D": 60, "1Y": 100
+            }
+            self.MIN_PIVOT_DISTANCE = self.min_pivot_distances.get(timeframe.upper(), 10)
         
         self._recent_candles: List[Dict] = []
         self._pattern_start_index: int = 0
@@ -803,5 +798,6 @@ class PatternValidatorV2:
         return patterns[0]
 
 
-def get_pattern_validator_v2(timeframe: str = "1D") -> PatternValidatorV2:
-    return PatternValidatorV2(timeframe)
+def get_pattern_validator_v2(timeframe: str = "1D", config: Dict = None) -> PatternValidatorV2:
+    """Factory function with optional Multi-Scale config."""
+    return PatternValidatorV2(timeframe, config)

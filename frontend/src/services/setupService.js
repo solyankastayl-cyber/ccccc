@@ -10,9 +10,10 @@ class SetupService {
   /**
    * Get full setup analysis
    */
-  async getSetup(symbol, timeframe = '1d') {
+  async getSetup(symbol, timeframe = '1D') {
     try {
-      const response = await fetch(`${API_URL}/api/ta/setup/${symbol}/${timeframe}`);
+      const tf = timeframe.toUpperCase();
+      const response = await fetch(`${API_URL}/api/ta/setup?symbol=${symbol}&tf=${tf}`);
       if (!response.ok) throw new Error('Failed to fetch setup');
       return await response.json();
     } catch (error) {

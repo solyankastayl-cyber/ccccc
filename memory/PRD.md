@@ -1,6 +1,6 @@
 # PRD - TA Engine (FOMO Platform)
 
-**Last Updated:** 2026-03-17
+**Last Updated:** December 2025
 
 ## Original Problem Statement
 Клонировать репозиторий FOMO, поднять bootstrap, работать с модулем теханализа. Исправить разорванную логику между backend setup engine и chart renderer.
@@ -25,6 +25,15 @@
 - **Layer Controls**: Patterns/Levels/Structure/Targets toggles working
 - **Consistency**: Debug panel, Detected Elements, and chart now read same data source
 
+### Session 3: Backend Architecture Audit (December 2025)
+- **Full Audit Document**: `/app/memory/TA_ENGINE_AUDIT.md`
+- Documented all pattern detection algorithms (triangles, channels, double patterns, flags, compression)
+- Documented structure engine (HH/HL/LH/LL, BOS, CHOCH detection)
+- Documented level engine (support/resistance, Fibonacci, liquidity zones)
+- Documented indicator engine (EMA, RSI, MACD, BB, Stochastic, ATR, OBV)
+- Documented setup builder confluence scoring system
+- Documented API layer and response format
+
 ## Core Features Working
 1. Pattern detection (ascending/descending channel, triangle, range)
 2. Support/resistance levels with strength %
@@ -34,13 +43,14 @@
 6. Layer visibility controls
 
 ## Backlog / P1 Features
-- [ ] Pattern geometry rendering on chart (lines visible but small scale)
+- [ ] Zoom-to-pattern button (auto-scale chart to pattern area)
 - [ ] Chart Lab tab functionality
 - [ ] Hypotheses tab functionality
 - [ ] Save Idea feature
 - [ ] Structure markers (BOS/CHOCH) on chart
 
 ## P2 Features
+- [ ] Auto TA mode (show only strongest elements)
 - [ ] Multi-asset comparison
 - [ ] Push notifications for trigger alerts
 - [ ] Historical pattern backtesting

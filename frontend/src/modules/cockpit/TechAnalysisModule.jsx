@@ -305,8 +305,8 @@ const TechAnalysisModule = () => {
 // VIEW COMPONENTS
 // ============================================
 
-// Import views - V2: Unified Chart Objects Architecture
-import ResearchView from './views/ResearchViewV2';
+// Import views - Light theme with tables and full UI
+import ResearchView from './views/ResearchViewNew';
 import ChartLabView from './views/ChartLabView';
 import HypothesesView from './views/HypothesesView';
 

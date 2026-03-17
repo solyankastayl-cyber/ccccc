@@ -34,26 +34,17 @@
 ### Session 4: Unified Chart Objects Architecture (December 2025)
 **Major refactoring based on user feedback:**
 
-#### New Backend: `/api/ta/research`
-- Single unified endpoint returning:
-  - `candles[]` - price data
-  - `objects[]` - chart objects with type, category, priority
-  - `summary` - bias, confidence, regime
-- Object categories: `pattern`, `level`, `structure`, `hypothesis`, `trading`
+#### New Backend: `/api/ta/research` (CREATED BUT NOT USED)
+- Single unified endpoint returning objects with type, category, priority
 - Mode filtering: Research, Hypothesis, Trading
-- Fail-safe: "No clear setup detected" when confidence < 0.4
+- Projection Engine with hypothesis path
 
-#### New Frontend: `ResearchViewV2.jsx`
-- Renders ONLY from `objects[]`
-- Uses `objectRenderer.js` for unified rendering
-- Layer toggles for Patterns/Levels/Structure/Hypothesis/Trading
-- Mode switcher: RESEARCH / HYPOTHESIS / TRADING
-- Priority-based z-order rendering
-
-#### Projection Engine
-- `HYPOTHESIS_PATH` - projection line from trigger to target
-- `CONFIDENCE_CORRIDOR` - uncertainty band around projection
-- Only shown when confidence > 0.55
+#### Kept: Light Theme ResearchViewNew.jsx
+- **User requested to keep original light design**
+- Setup Debug table
+- Detected Elements panel (Patterns, Indicators, Structure, Levels)
+- Technical Summary, Primary Setup, Market Structure panels
+- Pattern geometry rendering on chart
 
 ## Core Features Working
 1. Pattern detection (ascending/descending channel, triangle, range)
